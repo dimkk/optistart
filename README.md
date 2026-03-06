@@ -33,6 +33,9 @@ Before installation:
 - `curl` (required for `curl | bash` install flow)
 - `zellij` (required for full runtime behavior)
 - `uv` (optional, recommended for local development workflows)
+- `Codex` CLI (primary recommended agent runner)
+- `Claude Code` CLI (optional; supported by runner selection)
+- `OpenCode`, `Aider`, etc. (planned/upcoming)
 
 ## Installation
 
@@ -44,6 +47,12 @@ If you are in the project root (contains `scripts/optid` and `optidev/`), run:
 ```
 
 This installs/updates the CLI shim to `~/.local/bin/optid` and ensures PATH export in your shell rc.
+
+PATH profile behavior:
+
+- macOS + `bash`: `~/.bash_profile`
+- `zsh`: `~/.zshrc` and `~/.zprofile`
+- other shells: `~/.profile`
 
 ### Remote install via curl
 Default install command:

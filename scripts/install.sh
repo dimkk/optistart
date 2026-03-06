@@ -35,16 +35,35 @@ resolve_local_repo() {
 }
 
 install_path_export() {
-  local shell_name rc_file path_line
+  local shell_name path_line os_name
   shell_name="$(basename "${SHELL:-bash}")"
+  os_name="$(uname -s)"
   path_line='export PATH="$HOME/.local/bin:$PATH"'
+
+  append_once() {
+    local file="$1"
+    touch "$file"
+    grep -Fq "$path_line" "$file" || printf '\n%s\n' "$path_line" >>"$file"
+  }
+
   case "$shell_name" in
-    bash) rc_file="$HOME/.bashrc" ;;
-    zsh) rc_file="$HOME/.zshrc" ;;
-    *) rc_file="$HOME/.profile" ;;
+    bash)
+      # macOS commonly uses login shells with ~/.bash_profile
+      if [[ "$os_name" == "Darwin" ]]; then
+        append_once "$HOME/.bash_profile"
+      else
+        append_once "$HOME/.bashrc"
+      fi
+      ;;
+    zsh)
+      # Keep both interactive and login zsh startup files in sync.
+      append_once "$HOME/.zshrc"
+      append_once "$HOME/.zprofile"
+      ;;
+    *)
+      append_once "$HOME/.profile"
+      ;;
   esac
-  touch "$rc_file"
-  grep -Fq "$path_line" "$rc_file" || printf '\n%s\n' "$path_line" >>"$rc_file"
 }
 
 main() {
@@ -76,7 +95,7 @@ main() {
   install_path_export
 
   printf 'Installed: %s\n' "$BIN_DIR/optid"
-  printf 'Next: restart shell or run: source ~/.bashrc\n'
+  printf 'Next: restart shell or reload your shell profile\n'
   printf 'Then: optid status\n'
 }
 
