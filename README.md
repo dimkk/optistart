@@ -46,22 +46,22 @@ If you are in the project root (contains `scripts/optid` and `optidev/`), run:
 This installs/updates the CLI shim to `~/.local/bin/optid` and ensures PATH export in your shell rc.
 
 ### Remote install via curl
-Use this pattern (replace URL values):
+Default install command:
 
 ```bash
-curl -fsSL <INSTALL_SH_URL> | OPTID_GIT_URL=<GIT_REPO_URL> bash
+curl -fsSL https://raw.githubusercontent.com/dimkk/optistart/main/scripts/install.sh | bash
 ```
 
-Example URL shape for this repository layout:
+Optional override (for fork/private mirror):
 
 ```bash
-curl -fsSL <RAW_REPO_URL>/scripts/install.sh | OPTID_GIT_URL=<GIT_REPO_URL> bash
+curl -fsSL https://raw.githubusercontent.com/dimkk/optistart/main/scripts/install.sh | OPTID_GIT_URL=<YOUR_GIT_URL> bash
 ```
 
 Installer behavior:
 
 1. If local repo layout is detected, it uses local files only.
-2. If local repo is not detected, it clones/pulls from `OPTID_GIT_URL`.
+2. If local repo is not detected, it clones/pulls from `https://github.com/dimkk/optistart` (or `OPTID_GIT_URL` if overridden).
 3. It links `optid` into `~/.local/bin` and adds PATH export automatically.
 
 ## Quick Start
@@ -161,7 +161,7 @@ logs:
 
 Installer-specific:
 
-- `OPTID_GIT_URL` — git URL used when local repo is missing
+- `OPTID_GIT_URL` — git URL override (default: `https://github.com/dimkk/optistart`)
 - `OPTID_INSTALL_DIR` — clone destination (default `~/.optidev/optistart`)
 - `OPTID_BIN_DIR` — CLI link directory (default `~/.local/bin`)
 

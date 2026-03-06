@@ -3,7 +3,7 @@ set -euo pipefail
 
 BIN_DIR="${OPTID_BIN_DIR:-$HOME/.local/bin}"
 INSTALL_DIR="${OPTID_INSTALL_DIR:-$HOME/.optidev/optistart}"
-GIT_URL="${OPTID_GIT_URL:-}"
+GIT_URL="${OPTID_GIT_URL:-https://github.com/dimkk/optistart}"
 SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 
 fail() {
@@ -58,7 +58,6 @@ main() {
     printf 'Using local repository: %s\n' "$repo_dir"
   else
     require_cmd git
-    [[ -n "$GIT_URL" ]] || fail "set OPTID_GIT_URL to clone from git"
     mkdir -p "$(dirname "$INSTALL_DIR")"
     if [[ -d "$INSTALL_DIR/.git" ]]; then
       printf 'Updating existing repository: %s\n' "$INSTALL_DIR"
