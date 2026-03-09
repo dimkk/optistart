@@ -10,5 +10,9 @@ done
 ROOT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
 ROOT_DIR="$(cd -P "$ROOT_DIR/.." && pwd)"
 
-export PYTHONPATH="$ROOT_DIR${PYTHONPATH:+:$PYTHONPATH}"
-python3 -m optidev "$@"
+if ! command -v bun >/dev/null 2>&1; then
+  printf 'optid error: missing required command: bun\n' >&2
+  exit 1
+fi
+
+exec bun "$ROOT_DIR/ui/apps/server/src/optidevCli.ts" "$@"

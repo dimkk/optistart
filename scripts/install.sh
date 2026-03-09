@@ -5,6 +5,7 @@ BIN_DIR="${OPTID_BIN_DIR:-$HOME/.local/bin}"
 INSTALL_DIR="${OPTID_INSTALL_DIR:-$HOME/.optidev/optistart}"
 GIT_URL="${OPTID_GIT_URL:-https://github.com/dimkk/optistart}"
 SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+PROFILE_FILES=()
 
 fail() {
   printf 'install.sh error: %s\n' "$1" >&2
@@ -15,20 +16,22 @@ require_cmd() {
   command -v "$1" >/dev/null 2>&1 || fail "missing required command: $1"
 }
 
-check_python() {
-  python3 - <<'PY' || exit 1
-import sys
-if sys.version_info < (3, 12):
-    raise SystemExit("Python 3.12+ is required")
-print(f"Detected Python {sys.version.split()[0]}")
-PY
+install_bun_deps() {
+  local repo_dir="$1"
+  local ui_dir="$repo_dir/ui"
+
+  [[ -f "$ui_dir/package.json" ]] || fail "missing ui/package.json"
+  [[ -f "$ui_dir/bun.lock" ]] || fail "missing ui/bun.lock"
+
+  printf 'Installing Bun workspace dependencies in: %s\n' "$ui_dir"
+  bun install --cwd "$ui_dir" --frozen-lockfile --ignore-scripts
 }
 
 resolve_local_repo() {
   local candidate=""
-  if [[ -f "./scripts/optid" && -d "./optidev" ]]; then
+  if [[ -f "./scripts/optid" && -d "./ui/apps/server" ]]; then
     candidate="$(pwd)"
-  elif [[ -f "$SCRIPT_DIR/optid" && -d "$SCRIPT_DIR/../optidev" ]]; then
+  elif [[ -f "$SCRIPT_DIR/optid" && -d "$SCRIPT_DIR/../ui/apps/server" ]]; then
     candidate="$(cd "$SCRIPT_DIR/.." && pwd)"
   fi
   printf '%s' "$candidate"
@@ -44,6 +47,7 @@ install_path_export() {
     local file="$1"
     touch "$file"
     grep -Fq "$path_line" "$file" || printf '\n%s\n' "$path_line" >>"$file"
+    PROFILE_FILES+=("$file")
   }
 
   case "$shell_name" in
@@ -66,9 +70,34 @@ install_path_export() {
   esac
 }
 
+is_sourced() {
+  # Bash-compatible check: script was loaded via `source` / `.`
+  [[ -n "${BASH_SOURCE[0]:-}" && "${BASH_SOURCE[0]}" != "$0" ]]
+}
+
+print_profile_instructions() {
+  local file
+  [[ "${#PROFILE_FILES[@]}" -gt 0 ]] || return 0
+
+  printf 'Profile file(s) updated:\n'
+  for file in "${PROFILE_FILES[@]}"; do
+    printf '  - %s\n' "$file"
+  done
+
+  if is_sourced; then
+    printf 'Current shell updated: PATH reloaded in this session\n'
+    return 0
+  fi
+
+  printf 'To apply now in current shell, run:\n'
+  for file in "${PROFILE_FILES[@]}"; do
+    printf '  source %s\n' "$file"
+  done
+  printf 'Or open a new terminal.\n'
+}
+
 main() {
-  require_cmd python3
-  check_python
+  require_cmd bun
 
   local repo_dir
   repo_dir="$(resolve_local_repo)"
@@ -88,14 +117,19 @@ main() {
     repo_dir="$INSTALL_DIR"
   fi
 
-  [[ -f "$repo_dir/scripts/optid" && -d "$repo_dir/optidev" ]] || fail "invalid repository layout"
+  [[ -f "$repo_dir/scripts/optid" && -d "$repo_dir/ui/apps/server" ]] || fail "invalid repository layout"
+  install_bun_deps "$repo_dir"
 
   mkdir -p "$BIN_DIR"
   ln -sfn "$repo_dir/scripts/optid" "$BIN_DIR/optid"
   install_path_export
 
   printf 'Installed: %s\n' "$BIN_DIR/optid"
-  printf 'Next: restart shell or reload your shell profile\n'
+  if is_sourced; then
+    export PATH="$BIN_DIR:$PATH"
+    hash -r 2>/dev/null || true
+  fi
+  print_profile_instructions
   printf 'Then: optid status\n'
 }
 

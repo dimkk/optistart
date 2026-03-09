@@ -7,46 +7,76 @@ MVP is implemented and tested.
 
 Available commands:
 
-- `optid <project>`
+- `optid start <project> [--advice]`
+- `optid start [--advice]` (from current project directory)
+- `optid init <name|.>`
+- `optid go <name|.> [--advice]` (init + start in one command)
+- `optid resume [project|.]`
+- `optid reset [project|.]`
+- `optid workspace clone <name>`
 - `optid stop`
 - `optid status`
 - `optid logs`
 - `optid projects`
+- `optid telegram [start --token <token> --chat-id <chat-id>|stop|status]`
+- `optid skills [search|install]`
+- `optid agents [search|install]`
+- `optid advice` (print repo summary for current directory)
 
 Implemented subsystems:
 
-- terminal multiplexer abstraction (MVP backend: `zellij`)
+- manifest-first workspace runtime via `.optidev/workspace.yaml`
+- project-local session store via `.optidev/session.json`
+- terminal runtime backend abstraction (`zellij` and `textual`)
 - runner abstraction (`codex`, `claude`)
 - project discovery
 - global + project config loading/validation
 - workspace session bootstrap + restore
 - SQLite memory store (`~/.optidev/memory.sqlite`)
+- structured memory graph for tasks, features, releases, decisions, open loops, sessions, and agents
 - dev/tests/log hooks execution
 - plugin lifecycle (`start`, `message`, `stop`)
+- native Bun CLI and forked `t3` runtime sharing one TS/Bun workspace core
+- plugin startup augmentation for features like `--advice`
+- plugin-driven workspace bootstrap with tabs for chat, editor, logs, and tests
+- upstream `t3code` fork embedded under `./ui/`, with OptiDev wired into the forked web/server runtime
 
 ## Prerequisites
 Before installation:
 
 - `bash`
-- `python3` `3.12+` (required)
+- `bun` `1.3+` (required)
 - `git` (required only if installer needs to clone)
 - `curl` (required for `curl | bash` install flow)
-- `zellij` (required for full runtime behavior)
-- `uv` (optional, recommended for local development workflows)
+- `zellij` (optional runtime backend)
+- `fresh` editor CLI (recommended for the editor tab)
 - `Codex` CLI (primary recommended agent runner)
 - `Claude Code` CLI (optional; supported by runner selection)
 - `OpenCode`, `Aider`, etc. (planned/upcoming)
 
+Suggested installs:
+
+```bash
+npm install -g @fresh-editor/fresh-editor
+```
+
 ## Installation
 
 ### Local repo already present
-If you are in the project root (contains `scripts/optid` and `optidev/`), run:
+If you are in the project root (contains `scripts/optid` and `ui/apps/server/`), run:
 
 ```bash
 ./scripts/install.sh
 ```
 
 This installs/updates the CLI shim to `~/.local/bin/optid` and ensures PATH export in your shell rc.
+After install, the script prints the exact `source ...` command(s) for your shell profile.
+
+If you want PATH to be available immediately in the current shell session:
+
+```bash
+source ./scripts/install.sh
+```
 
 PATH profile behavior:
 
@@ -71,14 +101,55 @@ Installer behavior:
 
 1. If local repo layout is detected, it uses local files only.
 2. If local repo is not detected, it clones/pulls from `https://github.com/dimkk/optistart` (or `OPTID_GIT_URL` if overridden).
-3. It links `optid` into `~/.local/bin` and adds PATH export automatically.
+3. It installs Bun workspace dependencies under `./ui/`.
+4. It links `optid` into `~/.local/bin` and adds PATH export automatically.
+
+## T3 Fork UI
+
+The repository vendors upstream `t3code` under `./ui/` and integrates OptiDev into that fork instead of shipping a separate web shell.
+
+Install and build the fork:
+
+```bash
+cd ui
+bun install --ignore-scripts
+bun run build
+```
+
+Then start the built forked `t3` server from the vendored workspace:
+
+```bash
+cd /home/dimkk/new-proj/optistart/ui/apps/server
+T3CODE_NO_BROWSER=true bun run start
+```
+
+The forked server handles `/api/optidev/*` natively inside the `TS/Bun` runtime. Workspace state, memory, startup, lifecycle, and embedded plugin actions no longer depend on a Python bridge on the browser path.
+
+The integrated route is available at:
+
+```text
+http://127.0.0.1:3773/optidev
+```
+
+The forked OptiDev route exposes:
+
+- discovered projects with resolved paths
+- runtime actions (`init`, `start`, `go`, `resume`, `reset`, `stop`)
+- workspace clone
+- memory digest, open loops, and typed lookups
+- status and logs
+- plugin-backed integrations including advice, Telegram, skills, and agents
 
 ## Quick Start
 
 ```bash
-mkdir -p ~/.optidev/projects/demo
-optid projects
-optid demo
+optid go demo --advice
+optid telegram start
+optid start demo
+optid resume demo
+optid workspace clone feature-x
+optid skills search react
+optid agents search code
 optid status
 optid logs
 optid stop
@@ -90,6 +161,109 @@ If your shell has not reloaded PATH yet, use:
 ~/.local/bin/optid status
 ```
 
+## Workspace Manifest
+
+OptiDev v1-1 is manifest-first.
+
+Primary workspace files inside the repository:
+
+- `.optidev/workspace.yaml` — desired workspace state
+- `.optidev/session.json` — last known live runtime state
+
+Manifest tracks:
+
+- project name
+- active task
+- git branch
+- last known HEAD commit
+- active agents
+- tab/layout intent
+- services
+- tests
+- logs
+- context roots for agents/skills/MCP
+
+Git rule:
+
+- manifest stores the current branch and current HEAD commit
+- branch history belongs in session history or memory, not in the manifest itself
+
+If a manifest is missing, OptiDev bootstraps one from the current repository and legacy `.project/config.yaml`.
+
+## Workspace Runtime
+
+Default workspace startup is manifest-driven, with plugins extending the resolved runtime.
+
+When you run `optid start ...` or `optid go ...`, OptiDev resolves a backend-agnostic workspace layout with tabs:
+
+- `Chat` — launches a generated shell script that prints the startup prompt and starts the selected runner
+- `Editor` — launches `fresh .` in the project directory
+- `Logs` — runs the current command from `sessions/<project>/logs-command.sh`
+- `Tests` — runs the current command from `sessions/<project>/tests-command.sh`
+
+If `fresh` is not installed, the editor pane falls back to plain `bash`.
+
+Runtime backends:
+
+- `mux_backend: zellij` writes `layout.kdl` and uses external attach/kill session behavior.
+- `mux_backend: textual` writes `layout.textual.json` and points users back to `/optidev` in the forked UI.
+
+Startup also generates session artifacts:
+
+- `sessions/<project>/optid-context.md`
+- `sessions/<project>/logs-command.sh`
+- `sessions/<project>/tests-command.sh`
+- `sessions/<project>/agents.json`
+
+The chat runner is instructed to:
+
+1. read the generated OptiDev context first
+2. inspect memory, skills, and agents from that context
+3. discover or confirm app/test commands
+4. write those commands into the logs/tests command files
+
+If project config already provides commands, OptiDev seeds the command files automatically:
+
+- `dev.start[0]` seeds `logs-command.sh`
+- `tests.watch[0]` or `tests.command` seeds `tests-command.sh`
+
+Lifecycle commands:
+
+- `optid start` — bootstrap or restore, depending on manifest/session compatibility
+- `optid resume` — require compatible manifest/session and restore
+- `optid reset` — drop project-local session state and clear runtime session artifacts
+- `optid workspace clone <name>` — derive a branch workspace manifest under `.optidev/workspaces/<name>/`
+
+## Structured Memory
+
+OptiDev `v1-2` adds structured project memory on top of session/chat history.
+
+Available commands:
+
+- `optid memory`
+- `optid memory show feature <id>`
+- `optid memory show task <id>`
+- `optid memory show release <id>`
+- `optid memory open-loops`
+
+Memory graph sources:
+
+- `docs/tasks/*.md`
+- `docs/features/**/*.md`
+- `docs/releases/*.md`
+- `docs/v*/features-matrix.md`
+- `tasks-log/task-*-report.md`
+- `.optidev/session.json`
+
+Startup and resume now render a compact digest with:
+
+- current release
+- active feature
+- last completed feature
+- open loops
+- key decisions
+- next suggested action
+
 ## Data Layout
 Default state root: `~/.optidev`
 
@@ -98,8 +272,16 @@ Default state root: `~/.optidev`
 - `active_session.json` — active session pointer
 - `sessions/<project>/session.json` — session state
 - `sessions/<project>/layout.kdl` — generated zellij layout
+- `sessions/<project>/layout.textual.json` — generated textual runtime payload
 - `sessions/<project>/runner.json` — runner bootstrap metadata
 - `sessions/<project>/hooks.json` — hook process metadata
+- `plugins/telegram-config.json` — saved Telegram bridge configuration
+
+Project-local runtime state:
+
+- `.optidev/workspace.yaml` — desired manifest
+- `.optidev/session.json` — project-local runtime session
+- `.optidev/workspaces/<name>/workspace.yaml` — cloned branch manifest
 
 Use isolated state root:
 
@@ -118,7 +300,9 @@ Supported fields:
 - `workspace_layout`: string (informational in MVP)
 - `projects_path`: projects root path
 - `scan_paths`: additional discovery paths
-- `mux_backend`: only `zellij` in MVP
+- `mux_backend`: `zellij | textual`
+- `telegram_bot_token`: default Telegram bot token for `optid telegram start`
+- `telegram_chat_id`: default Telegram chat id for `optid telegram start`
 
 Example:
 
@@ -130,6 +314,8 @@ scan_paths:
   - ~/dev
   - ~/projects
 mux_backend: zellij
+telegram_bot_token: 123456:ABCDEF
+telegram_chat_id: 123456789
 ```
 
 ### Project config
@@ -164,9 +350,12 @@ logs:
 - `OPTIDEV_HOME` — override state root directory
 - `OPTIDEV_PROJECTS_DIR` — override projects root
 - `OPTIDEV_SCAN_PATHS` — colon-separated scan paths
-- `OPTIDEV_DISABLE_ZELLIJ=1` — disable zellij process launch
+- `OPTIDEV_DISABLE_ZELLIJ=1` — disable zellij process launch when using the `zellij` backend
+- `OPTIDEV_AUTO_ATTACH=0` — disable automatic backend attach/UI launch on `start/go`
 - `OPTIDEV_DISABLE_HOOKS=1` — disable hooks process launch
 - `OPTIDEV_PLUGIN_DIR` — plugin directory
+- `OPTIDEV_TELEGRAM_BOT_TOKEN` — optional emergency override; global config is preferred
+- `OPTIDEV_TELEGRAM_CHAT_ID` — optional emergency override; global config is preferred
 
 Installer-specific:
 
@@ -174,39 +363,117 @@ Installer-specific:
 - `OPTID_INSTALL_DIR` — clone destination (default `~/.optidev/optistart`)
 - `OPTID_BIN_DIR` — CLI link directory (default `~/.local/bin`)
 
-## Plugins
-A plugin is a Python file exposing class `Plugin` with methods:
+## Integrations
+The shipped OptiDev product now exposes built-in native integrations from the TS/Bun runtime instead of a separate Python plugin API.
 
-- `on_workspace_start(context)`
-- `on_agent_message(message)`
-- `on_workspace_stop(context)`
+Current native integrations:
 
-Minimal example:
+- `optid advice` and `start/go --advice` for repository bootstrap guidance
+- `optid telegram start|stop|status` for Telegram lifecycle mirroring
+- `optid skills search|install` for project-local skill discovery under `.agents/skills`
+- `optid agents search|install` for project-local agent discovery under `.agents/agents`
 
-```python
-class Plugin:
-    def on_workspace_start(self, context):
-        pass
+Project-specific automation assets still live in:
 
-    def on_agent_message(self, message):
-        pass
+- `.agents/agents/`
+- `.agents/skills/`
+- `.agents/mcp/`
 
-    def on_workspace_stop(self, context):
-        pass
+## Telegram Bridge
+
+Enable Telegram mirroring:
+
+```bash
+optid telegram start --token <token> --chat-id <chat-id>
 ```
+
+Or store defaults once in `~/.optidev/config.yaml` and then use:
+
+```bash
+optid telegram start
+```
+
+Disable it:
+
+```bash
+optid telegram stop
+```
+
+Check current state:
+
+```bash
+optid telegram status
+```
+
+Behavior:
+
+- Telegram state is stored in `~/.optidev/plugins/telegram-config.json`
+- workspace lifecycle events are appended to `~/.optidev/plugins/telegram-events.jsonl`
+- the active running workspace remains the only Telegram-connected workspace
+- start/stop/status are available from both the Bun CLI and the embedded `/optidev` UI
+
+Telegram commands inside chat:
+
+- `/help`
+- `/esc`
+- `/ctrlc`
+- `/enter`
+- `/status`
+- `/stop`
+
+How to get credentials:
+
+1. Create a bot with `@BotFather` and copy the HTTP API token.
+2. Open a private chat with the bot and send any message.
+3. Get your chat id:
+   - easiest: forward a message to `@userinfobot`, or
+   - call `https://api.telegram.org/bot<token>/getUpdates` after sending a message and read `message.chat.id`.
+
+Notes:
+
+- best experience is with `Codex` because the `chat` pane uses `codex --no-alt-screen` by default
+- if Telegram is enabled before `optid start`, the bridge attaches automatically when the workspace starts
+- `optid init` is idempotent; if the project is already initialized, it does not rewrite the structure
+
+## Advice Mode
+
+Use:
+
+```bash
+optid start <project> --advice
+```
+
+or:
+
+```bash
+optid go <project> --advice
+```
+
+Behavior:
+
+- the advice plugin adds a repo-analysis prompt before the main workspace bootstrap prompt
+- the generated chat pane script prints the combined startup prompt before launching the runner
+- the runner is instructed to inspect the repo, suggest useful skills and agents, then continue with workspace bootstrap duties
 
 ## Tests
 
 ```bash
-python3 -m unittest discover -s tests -p 'test_*.py' -v
+cd ui/apps/server && bun run test -- src/optidevCli.test.ts src/optidevCliShim.test.ts src/optidevNative.test.ts src/optidevMemory.test.ts src/optidevPersistence.test.ts src/optidevLifecycle.test.ts src/optidevStartup.test.ts src/optidevPlugins.test.ts src/optidevRoute.test.ts
+cd ui/apps/web && bun run test:browser -- src/routes/-optidev.browser.tsx
 ```
 
-Current suite status: `42 passed`.
+Current suite status: native `t3` server/browser OptiDev suites passing.
+
+## Guide
+
+- [`OptiDev UI Guide`](docs/guides/optidev-ui-guide.md)
 
 ## Release Matrices
-Current release: `v1-0`
+Current release: `v1-2`
 
-- `docs/v1-0/features-matrix.md`
-- `docs/v1-0/test-matrix.md`
+- `docs/v1-2/features-matrix.md`
+- `docs/v1-2/test-matrix.md`
+- `docs/tasks/task7.md`
+- `docs/tasks/task8.md`
 
-If release is not specified by user, agent auto-bumps minor version (`v1-0 -> v1-1`) and creates missing matrix files.
+If release is not specified by user, keep appending to the current user-approved release and do not auto-bump version.
