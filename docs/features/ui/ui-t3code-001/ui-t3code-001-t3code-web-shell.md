@@ -18,3 +18,4 @@ Fork upstream `t3code` into this repository and integrate OptiDev into the forke
 ## Notes
 - This feature requires a true fork-based integration, not a separate shell inspired by upstream.
 - The integration point lives inside the forked `t3` product and no longer relies on a Python bridge on the browser path.
+- The fork is vendored directly into `./ui/` as regular repository files, not as a nested git repository.

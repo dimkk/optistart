@@ -26,6 +26,7 @@
 - Treated historical task reports as history, but updated current release docs and control files so they no longer describe Python as an active runtime dependency.
 - Generated guide screenshots against the real built `/optidev` route with seeded demo state and deterministic mock integrations for `skills` and `agents`.
 - Kept the `.optidev/*` and `~/.optidev/*` contracts stable while removing the old implementation.
+- Converted `ui/` from a nested git repo/gitlink into a true vendored fork tracked directly by the outer repository.
 
 ## Open loops or known limits
 - Historical feature docs outside the current `v1-2` release still contain older migration-era references; current release docs are aligned.
