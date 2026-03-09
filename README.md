@@ -468,6 +468,8 @@ Current suite status: native `t3` server/browser OptiDev suites passing.
 
 - [`OptiDev UI Guide`](docs/guides/optidev-ui-guide.md)
 
+Historical or superseded documentation lives under `docs/obsolete/`. Active contributor guidance stays in the live `docs/` tree.
+
 ## Release Matrices
 Current release: `v1-2`
 
@@ -475,5 +477,6 @@ Current release: `v1-2`
 - `docs/v1-2/test-matrix.md`
 - `docs/tasks/task7.md`
 - `docs/tasks/task8.md`
+- `docs/tasks/task9.md`
 
 If release is not specified by user, keep appending to the current user-approved release and do not auto-bump version.

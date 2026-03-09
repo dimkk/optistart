@@ -22,3 +22,4 @@
 | ui-t3code-001 | Upstream `t3code` fork integrated with OptiDev runtime surfaces | DONE |
 | runtime-ts-002 | Staged TypeScript/Bun migration of OptiDev runtime core into the forked `t3` product | DONE |
 | runtime-ts-003 | Native-only repository cleanup after TS/Bun OptiDev cutover | DONE |
+| repo-docs-002 | Obsolete docs quarantine under `docs/obsolete/` | DONE |
