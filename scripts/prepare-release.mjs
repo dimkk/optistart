@@ -3,7 +3,7 @@
 import path from "node:path";
 
 import {
-  bumpReleaseVersion,
+  bumpChannelVersion,
   normalizeTag,
   readReleaseManifest,
   syncVersionedPackageJsons,
@@ -13,7 +13,7 @@ import {
 function usage() {
   return `Usage:
   node scripts/prepare-release.mjs show
-  node scripts/prepare-release.mjs bump [--apply] [--version <version>]`;
+  node scripts/prepare-release.mjs bump [--apply] [--version <version>] [--channel <stable|nightly>]`;
 }
 
 function parseArgs(argv) {
@@ -27,6 +27,11 @@ function parseArgs(argv) {
     }
     if (token === "--version") {
       flags.version = rest[index + 1];
+      index += 1;
+      continue;
+    }
+    if (token === "--channel") {
+      flags.channel = rest[index + 1];
       index += 1;
       continue;
     }
@@ -48,7 +53,8 @@ async function main() {
   }
 
   if (command === "bump") {
-    const nextVersion = flags.version ?? bumpReleaseVersion(manifest.version);
+    const channel = flags.channel ?? "stable";
+    const nextVersion = flags.version ?? bumpChannelVersion(manifest.version, { channel });
     if (flags.apply) {
       manifest.version = nextVersion;
       await writeReleaseManifest(repoRoot, manifest);
@@ -58,6 +64,7 @@ async function main() {
           {
             version: nextVersion,
             tag: normalizeTag(nextVersion),
+            channel,
             updatedPackageJsons,
             updatedManifest: path.join("scripts", "release-manifest.json"),
           },
@@ -69,7 +76,7 @@ async function main() {
     }
 
     process.stdout.write(
-      `${JSON.stringify({ version: nextVersion, tag: normalizeTag(nextVersion) }, null, 2)}\n`,
+      `${JSON.stringify({ version: nextVersion, tag: normalizeTag(nextVersion), channel }, null, 2)}\n`,
     );
     return;
   }

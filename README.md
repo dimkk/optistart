@@ -17,7 +17,9 @@ Main flows:
 - `optid` starts the shipped `t3code` + OptiDev UI bundle
 - `optid start <project>` bootstraps or restores an OptiDev workspace for a repository
 - `optid t3code refresh --dry-run --allow-dirty` shows how the vendored upstream refresh would replay onto the current `./ui/`
-- pull requests targeting `main` run the repository-owned validation suite before merge, and merges to `main` bump the shipped product version
+- pull requests targeting `main` run the repository-owned validation suite before merge
+- pushes to `test` run validation, bump the nightly version, package desktop binaries, and publish a prerelease
+- pushes to `main` run validation, bump the stable version, package desktop binaries, and publish a stable release
 
 ## Current Status
 MVP is implemented and tested.
@@ -180,7 +182,7 @@ curl -fsSL https://raw.githubusercontent.com/dimkk/optistart/main/scripts/instal
 Installer behavior:
 
 1. If local repo layout is detected, it uses local files only.
-2. If local repo is not detected, it resolves the current product version from `scripts/release-manifest.json` on `main`.
+2. If local repo is not detected, it resolves release metadata from `scripts/release-manifest.json` on `main` by default, or from the branch selected through `OPTID_GIT_REF` for nightly/test installs.
 3. It downloads the tagged source snapshot for that version into a versioned install layout under `~/.optidev/optistart/releases/`.
 4. It installs Bun workspace dependencies and builds the bundled `t3code` + OptiDev UI.
 5. It exposes a stable `optid` launcher and adds PATH export automatically.

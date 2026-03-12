@@ -18,3 +18,4 @@ Ship one stable `optid` entrypoint that can launch the bundled `t3code` + OptiDe
 ## Notes
 - Installed releases use a versioned layout under the install root and switch the stable launcher through a `current` pointer.
 - The launcher requires `bun` for all modes and `node` for bundled UI startup/build flows.
+- Remote installers default to the stable/tagged release channel, while nightly branch installs can explicitly target `test` via `OPTID_GIT_REF=test`.

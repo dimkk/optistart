@@ -7,6 +7,7 @@ import path from "node:path";
 import {
   RELEASE_MANIFEST_PATH,
   buildUpdateSuggestion,
+  bumpChannelVersion,
   bumpReleaseVersion,
   compareVersions,
   parseLatestTagFromLsRemoteOutput,
@@ -35,6 +36,11 @@ test("compareVersions sorts prerelease and stable versions correctly", () => {
 test("bumpReleaseVersion promotes prerelease to stable and increments stable patch", () => {
   assert.equal(bumpReleaseVersion("0.0.4-alpha.1"), "0.0.4");
   assert.equal(bumpReleaseVersion("0.0.4"), "0.0.5");
+});
+
+test("bumpChannelVersion advances nightly prerelease versions", () => {
+  assert.equal(bumpChannelVersion("0.0.4", { channel: "nightly" }), "0.0.5-alpha.1");
+  assert.equal(bumpChannelVersion("0.0.4-alpha.1", { channel: "nightly" }), "0.0.4-alpha.2");
 });
 
 test("parseLatestTagFromLsRemoteOutput returns the greatest semver tag", () => {

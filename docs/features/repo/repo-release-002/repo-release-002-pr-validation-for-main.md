@@ -8,7 +8,7 @@ Require one repository-owned validation suite on pull requests targeting `main` 
 - The validation script installs vendored workspace dependencies, runs root script tests, verifies doc/layout constraints, runs vendored lint/tests, installs the browser runtime, and executes the OptiDev browser route suite.
 - `ui/package.json` marks `node-pty` as a trusted Bun dependency so native server tests can build and load the PTY module during validation.
 - `.github/workflows/pr-main-checks.yml` runs the shared validation script for every pull request targeting `main`.
-- `.github/workflows/release-bump.yml` reuses the same validation script before applying a version bump and tag on pushes to `main`.
+- `.github/workflows/release-main-stable.yml` reuses the same validation script before applying the stable version bump, tag, binary packaging, and release publication on pushes to `main`.
 
 ## Notes
 - The repository now keeps PR validation and post-merge release validation in sync by using one script instead of duplicating command lists across workflows.

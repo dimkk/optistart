@@ -109,12 +109,38 @@ export function versionFromTag(versionOrTag) {
 }
 
 export function bumpReleaseVersion(version) {
+  return bumpChannelVersion(version, { channel: "stable" });
+}
+
+export function bumpChannelVersion(version, options = {}) {
   const parsed = parseSemver(version);
-  if (parsed.prerelease !== null) {
-    return `${parsed.major}.${parsed.minor}.${parsed.patch}`;
+  const channel = options.channel ?? "stable";
+
+  if (channel === "stable") {
+    if (parsed.prerelease !== null) {
+      return `${parsed.major}.${parsed.minor}.${parsed.patch}`;
+    }
+
+    return `${parsed.major}.${parsed.minor}.${parsed.patch + 1}`;
   }
 
-  return `${parsed.major}.${parsed.minor}.${parsed.patch + 1}`;
+  if (channel === "nightly") {
+    if (parsed.prerelease === null) {
+      return `${parsed.major}.${parsed.minor}.${parsed.patch + 1}-alpha.1`;
+    }
+
+    const nightlyMatch = parsed.prerelease.match(/^alpha\.(\d+)$/);
+    if (nightlyMatch) {
+      return `${parsed.major}.${parsed.minor}.${parsed.patch}-alpha.${Number(nightlyMatch[1]) + 1}`;
+    }
+
+    return `${parsed.major}.${parsed.minor}.${parsed.patch}-alpha.1`;
+  }
+
+  throw new ReleaseError(`unsupported release channel: ${channel}`, {
+    code: "INVALID_RELEASE_CHANNEL",
+    details: { channel },
+  });
 }
 
 export async function readReleaseManifest(repoRoot) {
