@@ -3,8 +3,14 @@ set -euo pipefail
 
 BIN_DIR="${OPTID_BIN_DIR:-$HOME/.local/bin}"
 INSTALL_ROOT="${OPTID_INSTALL_DIR:-$HOME/.optidev/optistart}"
-MANIFEST_URL="${OPTID_MANIFEST_URL:-https://raw.githubusercontent.com/dimkk/optistart/main/scripts/release-manifest.json}"
 GIT_REF="${OPTID_GIT_REF:-}"
+if [[ -n "${OPTID_MANIFEST_URL:-}" ]]; then
+  MANIFEST_URL="$OPTID_MANIFEST_URL"
+elif [[ -n "$GIT_REF" ]]; then
+  MANIFEST_URL="https://raw.githubusercontent.com/dimkk/optistart/$GIT_REF/scripts/release-manifest.json"
+else
+  MANIFEST_URL="https://raw.githubusercontent.com/dimkk/optistart/main/scripts/release-manifest.json"
+fi
 SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 PROFILE_FILES=()
 

@@ -2,8 +2,14 @@ $ErrorActionPreference = "Stop"
 
 $BinDir = if ($env:OPTID_BIN_DIR) { $env:OPTID_BIN_DIR } else { Join-Path $env:LOCALAPPDATA "optid\bin" }
 $InstallRoot = if ($env:OPTID_INSTALL_DIR) { $env:OPTID_INSTALL_DIR } else { Join-Path $HOME ".optidev\optistart" }
-$ManifestUrl = if ($env:OPTID_MANIFEST_URL) { $env:OPTID_MANIFEST_URL } else { "https://raw.githubusercontent.com/dimkk/optistart/main/scripts/release-manifest.json" }
 $GitRef = if ($env:OPTID_GIT_REF) { $env:OPTID_GIT_REF } else { $null }
+$ManifestUrl = if ($env:OPTID_MANIFEST_URL) {
+  $env:OPTID_MANIFEST_URL
+} elseif ($GitRef) {
+  "https://raw.githubusercontent.com/dimkk/optistart/$GitRef/scripts/release-manifest.json"
+} else {
+  "https://raw.githubusercontent.com/dimkk/optistart/main/scripts/release-manifest.json"
+}
 
 function Fail($Message) {
   throw "install.ps1 error: $Message"

@@ -16,6 +16,7 @@
   - `nightly` advances prerelease versions or starts the next patch line as `-alpha.1`
 - Kept installer behavior aligned with the release split by documenting and supporting nightly branch installs through `OPTID_GIT_REF=test`.
 - Updated `README.md` so the top-level install/release guidance reflects `test` nightly versus `main` stable automation.
+- Adjusted both installer scripts so `OPTID_GIT_REF=test` also switches manifest resolution to the same branch, avoiding `main`-only raw manifest lookups during nightly installs.
 
 ## tests added or updated
 - Updated `scripts/release-lib.test.mjs` to cover nightly version bump behavior.

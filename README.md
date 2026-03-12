@@ -171,7 +171,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
 How it works:
 
 - stable remote install with no extra env vars still resolves the tagged release flow from `main`
-- nightly remote install should set `OPTID_GIT_REF=test`, so the installer downloads the branch snapshot from `origin/test` instead of a tagged stable archive
+- nightly remote install should set `OPTID_GIT_REF=test`, so the installer resolves both the manifest and the branch snapshot from `origin/test` instead of the stable/tagged `main` flow
 - local-repo install still works the same way after a `git clone --branch test`
 
 Optional override (for fork/private mirror):
