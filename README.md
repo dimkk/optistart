@@ -130,11 +130,11 @@ Use this path when you want the current pre-release branch state instead of the 
 Remote one-liners:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/dimkk/optistart/main/scripts/install.sh | OPTID_GIT_REF=test bash
+curl -fsSL https://raw.githubusercontent.com/dimkk/optistart/test/scripts/install.sh | bash
 ```
 
 ```powershell
-powershell -ExecutionPolicy Bypass -Command "$env:OPTID_GIT_REF='test'; iwr https://raw.githubusercontent.com/dimkk/optistart/main/scripts/install.ps1 -UseBasicParsing | iex"
+iwr https://raw.githubusercontent.com/dimkk/optistart/test/scripts/install.ps1 -UseBasicParsing | iex
 ```
 
 Unix/macOS:
@@ -170,7 +170,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
 How it works:
 
 - stable remote install with no extra env vars still resolves the tagged release flow from `main`
-- nightly remote install sets `OPTID_GIT_REF=test`, so the installer downloads the branch snapshot from `origin/test` instead of a tagged archive
+- nightly remote install can use the test-branch installer directly from `origin/test`
 - local-repo install still works the same way after a `git clone --branch test`
 
 Optional override (for fork/private mirror):
