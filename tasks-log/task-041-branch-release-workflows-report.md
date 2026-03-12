@@ -17,6 +17,7 @@
 - Kept installer behavior aligned with the release split by documenting and supporting nightly branch installs through `OPTID_GIT_REF=test`.
 - Updated `README.md` so the top-level install/release guidance reflects `test` nightly versus `main` stable automation.
 - Adjusted both installer scripts so `OPTID_GIT_REF=test` also switches manifest resolution to the same branch, avoiding `main`-only raw manifest lookups during nightly installs.
+- Fixed installer edge cases discovered during live Windows testing: PowerShell `iex` execution with empty `$PSScriptRoot`, nightly reinstall refresh behavior for branch snapshots, and Windows PATH propagation for the generated `optid.cmd` shim.
 
 ## tests added or updated
 - Updated `scripts/release-lib.test.mjs` to cover nightly version bump behavior.

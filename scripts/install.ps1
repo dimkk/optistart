@@ -36,6 +36,65 @@ function Resolve-LocalRepo {
   return $null
 }
 
+function Normalize-PathEntry {
+  param([string]$PathEntry)
+
+  if (-not $PathEntry) {
+    return ""
+  }
+
+  return $PathEntry.Trim().TrimEnd("\")
+}
+
+function Path-ContainsEntry {
+  param(
+    [string]$PathValue,
+    [string]$Entry
+  )
+
+  $normalizedEntry = Normalize-PathEntry $Entry
+  if (-not $normalizedEntry) {
+    return $false
+  }
+
+  foreach ($candidate in ($PathValue -split ";")) {
+    if ((Normalize-PathEntry $candidate) -ieq $normalizedEntry) {
+      return $true
+    }
+  }
+
+  return $false
+}
+
+function Append-PathEntry {
+  param(
+    [string]$PathValue,
+    [string]$Entry
+  )
+
+  if (-not $PathValue) {
+    return $Entry
+  }
+
+  return "$PathValue;$Entry"
+}
+
+function Ensure-BinDirOnPath {
+  param([string]$BinDir)
+
+  $sessionPath = [string]$env:PATH
+  if (-not (Path-ContainsEntry -PathValue $sessionPath -Entry $BinDir)) {
+    $env:PATH = Append-PathEntry -PathValue $sessionPath -Entry $BinDir
+    Write-Host "Updated current session PATH: $BinDir"
+  }
+
+  $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+  if (-not (Path-ContainsEntry -PathValue $userPath -Entry $BinDir)) {
+    [Environment]::SetEnvironmentVariable("Path", (Append-PathEntry -PathValue $userPath -Entry $BinDir), "User")
+    Write-Host "Added to user PATH: $BinDir"
+  }
+}
+
 function Install-BunDepsAndBuild($RepoDir) {
   $uiDir = Join-Path $RepoDir "ui"
   if (-not (Test-Path (Join-Path $uiDir "package.json"))) {
@@ -123,34 +182,36 @@ function Install-BranchSnapshot {
   $currentDir = Join-Path $InstallRoot "current"
   $zipUrl = "$($manifest.repository.url)/archive/refs/heads/$GitRef.zip"
 
-  if (-not (Test-Path $branchDir)) {
-    $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("optid-branch-" + [System.Guid]::NewGuid())
-    $zipPath = Join-Path $tempDir "optid-branch.zip"
-    New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
-    New-Item -ItemType Directory -Force -Path $branchDir | Out-Null
+  if (Test-Path $currentDir) {
+    Remove-Item $currentDir -Recurse -Force
+  }
 
-    Write-Host "Downloading branch snapshot: $zipUrl"
-    Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing
-    Expand-Archive -Path $zipPath -DestinationPath $tempDir -Force
+  if (Test-Path $branchDir) {
+    Write-Host "Refreshing existing branch directory: $branchDir"
+    Remove-Item $branchDir -Recurse -Force
+  }
 
-    $expandedRoot = Get-ChildItem $tempDir -Directory | Where-Object { $_.Name -ne "branches" } | Select-Object -First 1
-    if (-not $expandedRoot) {
-      Fail "failed to extract branch archive"
-    }
+  $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("optid-branch-" + [System.Guid]::NewGuid())
+  $zipPath = Join-Path $tempDir "optid-branch.zip"
+  New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
+  New-Item -ItemType Directory -Force -Path $branchDir | Out-Null
 
-    Get-ChildItem $expandedRoot.FullName -Force | ForEach-Object {
-      Move-Item $_.FullName $branchDir -Force
-    }
-  } else {
-    Write-Host "Using existing branch directory: $branchDir"
+  Write-Host "Downloading branch snapshot: $zipUrl"
+  Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing
+  Expand-Archive -Path $zipPath -DestinationPath $tempDir -Force
+
+  $expandedRoot = Get-ChildItem $tempDir -Directory | Where-Object { $_.Name -ne "branches" } | Select-Object -First 1
+  if (-not $expandedRoot) {
+    Fail "failed to extract branch archive"
+  }
+
+  Get-ChildItem $expandedRoot.FullName -Force | ForEach-Object {
+    Move-Item $_.FullName $branchDir -Force
   }
 
   Install-BunDepsAndBuild $branchDir
 
   New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
-  if (Test-Path $currentDir) {
-    Remove-Item $currentDir -Recurse -Force
-  }
   New-Item -ItemType Junction -Path $currentDir -Target $branchDir | Out-Null
   return $currentDir
 }
@@ -205,5 +266,6 @@ if ($repoDir) {
 }
 
 Write-WindowsShim -CurrentDir $repoDir -BinDir $BinDir
+Ensure-BinDirOnPath -BinDir $BinDir
 Write-Host "Installed: $(Join-Path $BinDir 'optid.cmd')"
 Write-Host "Then: optid"

@@ -128,3 +128,19 @@ test("release manifest read/write and package syncing use one source of truth", 
 test("parseSemver rejects invalid versions", () => {
   assert.throws(() => parseSemver("foo"));
 });
+
+test("buildUpdateSuggestion uses shell-appropriate install commands", () => {
+  const suggestion = buildUpdateSuggestion({
+    currentVersion: "0.0.4-alpha.1",
+    latestVersion: "0.0.4",
+    manifest: {
+      install: {
+        unixScriptUrl: "https://example.invalid/install.sh",
+        windowsScriptUrl: "https://example.invalid/install.ps1",
+      },
+    },
+  });
+
+  assert.match(suggestion, /curl -fsSL https:\/\/example\.invalid\/install\.sh \| bash/);
+  assert.match(suggestion, /irm https:\/\/example\.invalid\/install\.ps1 \| iex/);
+});

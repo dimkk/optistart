@@ -250,7 +250,7 @@ export function resolveReleaseZipUrl(manifest, version) {
 
 export function buildUpdateSuggestion({ currentVersion, latestVersion, manifest }) {
   const unixCommand = `curl -fsSL ${manifest.install.unixScriptUrl} | bash`;
-  const powershellCommand = `powershell -ExecutionPolicy Bypass -Command "iwr ${manifest.install.windowsScriptUrl} -UseBasicParsing | iex"`;
+  const powershellCommand = `irm ${manifest.install.windowsScriptUrl} | iex`;
 
   return [
     `Update available: v${currentVersion} -> v${latestVersion}`,

@@ -9,7 +9,7 @@ curl -fsSL https://raw.githubusercontent.com/dimkk/optistart/main/scripts/instal
 ```
 
 ```powershell
-powershell -ExecutionPolicy Bypass -Command "Invoke-WebRequest https://raw.githubusercontent.com/dimkk/optistart/main/scripts/install.ps1 -UseBasicParsing | Invoke-Expression"
+irm https://raw.githubusercontent.com/dimkk/optistart/main/scripts/install.ps1 | iex
 ```
 
 Main flows:
@@ -120,7 +120,7 @@ curl -fsSL https://raw.githubusercontent.com/dimkk/optistart/main/scripts/instal
 ### Remote install via PowerShell
 
 ```powershell
-powershell -ExecutionPolicy Bypass -Command "iwr https://raw.githubusercontent.com/dimkk/optistart/main/scripts/install.ps1 -UseBasicParsing | iex"
+irm https://raw.githubusercontent.com/dimkk/optistart/main/scripts/install.ps1 | iex
 ```
 
 ### Nightly install from `test`
@@ -173,6 +173,7 @@ How it works:
 - stable remote install with no extra env vars still resolves the tagged release flow from `main`
 - nightly remote install should set `OPTID_GIT_REF=test`, so the installer resolves both the manifest and the branch snapshot from `origin/test` instead of the stable/tagged `main` flow
 - local-repo install still works the same way after a `git clone --branch test`
+- Windows installer also adds `%LOCALAPPDATA%\optid\bin` to the current session and user `PATH`, so `optid` should be available in new shells without manual PATH editing
 
 Optional override (for fork/private mirror):
 

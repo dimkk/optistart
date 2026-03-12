@@ -194,18 +194,23 @@ install_remote_branch_snapshot() {
 
   mkdir -p "$branches_dir"
 
-  if [[ ! -d "$branch_dir" ]]; then
-    local tmp_dir archive_path
-    tmp_dir="$(mktemp -d)"
-    archive_path="$tmp_dir/optid-branch.tar.gz"
-
-    printf 'Downloading branch snapshot: %s\n' "$archive_url"
-    curl -fsSL "$archive_url" -o "$archive_path"
-    mkdir -p "$branch_dir"
-    tar -xzf "$archive_path" -C "$branch_dir" --strip-components=1
-  else
-    printf 'Using existing branch directory: %s\n' "$branch_dir"
+  if [[ -e "$current_link" || -L "$current_link" ]]; then
+    rm -rf "$current_link"
   fi
+
+  if [[ -d "$branch_dir" ]]; then
+    printf 'Refreshing existing branch directory: %s\n' "$branch_dir"
+    rm -rf "$branch_dir"
+  fi
+
+  local tmp_dir archive_path
+  tmp_dir="$(mktemp -d)"
+  archive_path="$tmp_dir/optid-branch.tar.gz"
+
+  printf 'Downloading branch snapshot: %s\n' "$archive_url"
+  curl -fsSL "$archive_url" -o "$archive_path"
+  mkdir -p "$branch_dir"
+  tar -xzf "$archive_path" -C "$branch_dir" --strip-components=1
 
   install_bun_deps "$branch_dir"
   mkdir -p "$INSTALL_ROOT"
