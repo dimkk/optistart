@@ -443,7 +443,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
           const url = new URL(req.url ?? "/", `http://localhost:${port}`);
           if (
             yield* Effect.promise(() =>
-              tryHandleOptiDevRequest(url, requestBody, res, {
+              tryHandleOptiDevRequest(req, url, requestBody, res, {
                 cwd,
                 homeDir: process.env.OPTIDEV_HOME,
               }),

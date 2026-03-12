@@ -6,11 +6,61 @@ export interface OptiDevProjectRecord {
   path: string;
 }
 
+export type OptiDevFileScope = "repo" | "agents" | "skills";
+
+export interface OptiDevFileEntry {
+  name: string;
+  path: string;
+  kind: "file" | "directory";
+  size: number | null;
+}
+
+export interface OptiDevDirectoryPayload {
+  scope: OptiDevFileScope;
+  path: string;
+  entries: OptiDevFileEntry[];
+}
+
+export interface OptiDevFilePayload {
+  scope: OptiDevFileScope;
+  path: string;
+  name: string;
+  kind: "markdown" | "image" | "code" | "text" | "binary";
+  language: string | null;
+  content: string | null;
+  size: number;
+  editable: boolean;
+}
+
+export interface OptiDevSessionPayload {
+  project: string | null;
+  projectPath: string | null;
+  status: string;
+  muxBackend: string | null;
+  sessionName: string | null;
+  runner: string | null;
+  hooksRunning: number;
+  hooksTotal: number;
+  mode: string | null;
+  branch: string | null;
+  headCommit: string | null;
+  activeTask: string | null;
+  agentsCount: number;
+  manifestValid: boolean;
+}
+
+export interface OptiDevTelegramConfigPayload {
+  botToken: string;
+  chatId: string;
+}
+
 export interface OptiDevStatePayload {
+  repoRoot: string;
   status: string;
   logs: string;
   projects: OptiDevProjectRecord[];
   memorySummary: string[];
+  session: OptiDevSessionPayload;
 }
 
 export interface OptiDevActionPayload {
@@ -23,6 +73,11 @@ export interface OptiDevActionPayload {
   identifier?: string;
   command?: string;
   args?: string[];
+  scope?: OptiDevFileScope;
+  path?: string;
+  content?: string;
+  botToken?: string;
+  chatId?: string;
 }
 
 export interface OptiDevActionResponse {

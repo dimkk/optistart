@@ -9,7 +9,9 @@ import type {
   OptiDevActionResponse,
   OptiDevProjectRecord,
   OptiDevRouteContext,
+  OptiDevSessionPayload,
 } from "./optidevContract";
+import { resolveOptiDevProjectRoot } from "./optidevContract";
 
 export interface NativeGlobalConfig {
   defaultRunner: string;
@@ -298,37 +300,76 @@ async function validateManifest(projectPath: string): Promise<boolean> {
   return true;
 }
 
-export async function nativeStatusText(context: OptiDevRouteContext): Promise<string> {
+export async function nativeSessionPayload(
+  context: OptiDevRouteContext,
+): Promise<OptiDevSessionPayload> {
   const status = await readCurrentSession(context);
   if (!status) {
-    return "No active session.";
+    return {
+      project: null,
+      projectPath: null,
+      status: "inactive",
+      muxBackend: null,
+      sessionName: null,
+      runner: null,
+      hooksRunning: 0,
+      hooksTotal: 0,
+      mode: null,
+      branch: null,
+      headCommit: null,
+      activeTask: null,
+      agentsCount: 0,
+      manifestValid: false,
+    };
   }
+
   const runner = await readRunnerName(context, status.project);
   const hooks = await readHooksSummary(context, status.project);
   const resolvedProjectPath = await resolveProjectPath(context, status.project);
+  const projectSession = resolvedProjectPath ? await readProjectSession(resolvedProjectPath) : null;
+  const manifestValid = resolvedProjectPath ? await validateManifest(resolvedProjectPath) : false;
 
+  return {
+    project: status.project,
+    projectPath: resolvedProjectPath,
+    status: status.status,
+    muxBackend: status.mux_backend,
+    sessionName: status.mux_session_name,
+    runner,
+    hooksRunning: hooks.running,
+    hooksTotal: hooks.total,
+    mode: typeof projectSession?.last_mode === "string" ? projectSession.last_mode : null,
+    branch: typeof projectSession?.branch === "string" ? projectSession.branch : null,
+    headCommit: typeof projectSession?.head_commit === "string" ? projectSession.head_commit : null,
+    activeTask: typeof projectSession?.active_task === "string" ? projectSession.active_task : null,
+    agentsCount: Array.isArray(projectSession?.agents) ? projectSession.agents.length : 0,
+    manifestValid,
+  };
+}
+
+export async function nativeStatusText(context: OptiDevRouteContext): Promise<string> {
+  const session = await nativeSessionPayload(context);
+  if (!session.project || !session.sessionName || !session.muxBackend || !session.runner) {
+    return "No active session.";
+  }
   let suffix = "";
-  if (resolvedProjectPath) {
-    const projectSession = await readProjectSession(resolvedProjectPath);
-    const manifestValid = await validateManifest(resolvedProjectPath);
-    if (projectSession && manifestValid) {
-      suffix =
-        ` | Mode: ${projectSession.last_mode ?? ""}` +
-        ` | Branch: ${projectSession.branch ?? ""}` +
-        ` | Agents: ${Array.isArray(projectSession.agents) ? projectSession.agents.length : 0}`;
-      if (typeof projectSession.head_commit === "string" && projectSession.head_commit.length > 0) {
-        suffix += ` | Head: ${projectSession.head_commit.slice(0, 12)}`;
-      }
-      if (typeof projectSession.active_task === "string" && projectSession.active_task.length > 0) {
-        suffix += ` | Task: ${projectSession.active_task}`;
-      }
+  if (session.manifestValid) {
+    suffix =
+      ` | Mode: ${session.mode ?? ""}` +
+      ` | Branch: ${session.branch ?? ""}` +
+      ` | Agents: ${session.agentsCount}`;
+    if (session.headCommit && session.headCommit.length > 0) {
+      suffix += ` | Head: ${session.headCommit.slice(0, 12)}`;
+    }
+    if (session.activeTask && session.activeTask.length > 0) {
+      suffix += ` | Task: ${session.activeTask}`;
     }
   }
 
   return (
-    `Project: ${status.project} | Status: ${status.status} | ` +
-    `Mux: ${status.mux_backend} | Session: ${status.mux_session_name} | ` +
-    `Runner: ${runner} | Hooks: ${hooks.running}/${hooks.total} running` +
+    `Project: ${session.project} | Status: ${session.status} | ` +
+    `Mux: ${session.muxBackend} | Session: ${session.sessionName} | ` +
+    `Runner: ${session.runner} | Hooks: ${session.hooksRunning}/${session.hooksTotal} running` +
     suffix
   );
 }
@@ -393,11 +434,12 @@ export async function buildNativeState(
   context: OptiDevRouteContext,
   memorySummaryLoader: () => Promise<OptiDevActionResponse>,
 ): Promise<OptiDevActionResponse> {
-  const [status, logs, projectsAction, memory] = await Promise.all([
+  const [status, logs, projectsAction, memory, session] = await Promise.all([
     nativeStatusText(context),
     nativeLogsText(context),
     discoverProjectsNative(context),
     memorySummaryLoader(),
+    nativeSessionPayload(context),
   ]);
 
   const warnings = memory.ok ? [] : memory.lines;
@@ -405,10 +447,12 @@ export async function buildNativeState(
     ok: true,
     lines: warnings,
     state: {
+      repoRoot: resolveOptiDevProjectRoot(context.cwd),
       status,
       logs,
       projects: projectsAction,
       memorySummary: memory.ok ? memory.lines : memory.lines,
+      session,
     },
   };
 }

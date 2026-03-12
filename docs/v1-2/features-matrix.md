@@ -23,3 +23,14 @@
 | runtime-ts-002 | Staged TypeScript/Bun migration of OptiDev runtime core into the forked `t3` product | DONE |
 | runtime-ts-003 | Native-only repository cleanup after TS/Bun OptiDev cutover | DONE |
 | repo-docs-002 | Obsolete docs quarantine under `docs/obsolete/` | DONE |
+| repo-upstream-001 | Vendored `t3code` upstream refresh and overlay replay workflow | DONE |
+| repo-upstream-002 | Deterministic conflict resolution for vendored `t3code` refresh hotspots | DONE |
+| repo-upstream-003 | Explicit operator command for vendored `t3code` upstream refresh | DONE |
+| repo-release-001 | Merge-to-main release bump and repository-owned tag/build automation | DONE |
+| repo-release-002 | Full repository validation on pull requests targeting `main` | DONE |
+| cli-update-001 | Installed CLI update check against the latest tagged release | DONE |
+| cli-launch-001 | Installed `optid` launcher for the shipped vendored `t3code` + OptiDev product | DONE |
+| ui-shell-002 | OptiDev first-class `t3code` shell integration and stable route UX | DONE |
+| repo-files-002 | Repository file explorer and typed file viewer inside OptiDev | DONE |
+| runtime-session-002 | Session and restore management surface inside the integrated OptiDev UI | DONE |
+| plugins-config-001 | Integrated editing for agents, skills, and Telegram configuration | DONE |

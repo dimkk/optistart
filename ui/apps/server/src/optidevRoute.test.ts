@@ -96,7 +96,7 @@ async function withRouteServer(
     });
     req.on("end", () => {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
-      void tryHandleOptiDevRequest(url, requestBody, res, options);
+      void tryHandleOptiDevRequest(req, url, requestBody, res, options);
     });
   });
 
@@ -204,19 +204,109 @@ describe("optidevRoute", () => {
       const body = (await response.json()) as {
         ok: boolean;
         state: {
+          repoRoot: string;
           status: string;
           projects: Array<{ name: string; path: string }>;
           memorySummary: string[];
+          session: {
+            project: string | null;
+            runner: string | null;
+          };
         };
       };
 
       expect(response.status).toBe(200);
       expect(body.ok).toBe(true);
+      expect(body.state.repoRoot).toBe(repoRoot);
       expect(body.state.status).toContain("Project: demo");
       expect(body.state.status).toContain("Task: ship-it");
+      expect(body.state.session.project).toBe("demo");
+      expect(body.state.session.runner).toBe("codex");
       expect(body.state.projects).toEqual([{ name: "demo", path: path.join(homeDir, "projects", "demo") }]);
       expect(body.state.memorySummary.join("\n")).toContain("Project memory:");
       expect(body.state.memorySummary.join("\n")).toContain("active feature: ship-it");
+    });
+  });
+
+  it("serves repository file listings and previews through native endpoints", async () => {
+    const { repoRoot, uiRoot } = createMockRepoRoot();
+    fs.mkdirSync(path.join(repoRoot, "docs"), { recursive: true });
+    fs.writeFileSync(path.join(repoRoot, "README.md"), "# OptiDev\n", "utf8");
+    fs.writeFileSync(path.join(repoRoot, "docs", "guide.md"), "hello\n", "utf8");
+
+    await withRouteServer({ cwd: uiRoot }, async (baseUrl) => {
+      const listing = await fetch(`${baseUrl}/api/optidev/fs/list?scope=repo&path=`);
+      const preview = await fetch(
+        `${baseUrl}/api/optidev/fs/read?scope=repo&path=${encodeURIComponent("README.md")}`,
+      );
+
+      const listingBody = (await listing.json()) as {
+        ok: boolean;
+        data: { entries: Array<{ name: string; kind: string }> };
+      };
+      const previewBody = (await preview.json()) as {
+        ok: boolean;
+        data: { kind: string; content: string };
+      };
+
+      expect(listing.status).toBe(200);
+      expect(listingBody.data.entries).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: "docs", kind: "directory" }),
+          expect.objectContaining({ name: "README.md", kind: "file" }),
+        ]),
+      );
+      expect(preview.status).toBe(200);
+      expect(previewBody.data.kind).toBe("markdown");
+      expect(previewBody.data.content).toContain("# OptiDev");
+    });
+  });
+
+  it("saves plugin files and Telegram config through native endpoints", async () => {
+    const { repoRoot, uiRoot } = createMockRepoRoot();
+    const homeDir = makeTempDir("optidev-native-home-");
+    fs.mkdirSync(path.join(repoRoot, ".agents", "agents"), { recursive: true });
+
+    await withRouteServer({ cwd: uiRoot, homeDir }, async (baseUrl) => {
+      const saveFile = await fetch(`${baseUrl}/api/optidev/fs/write`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          scope: "agents",
+          path: "reviewer/SKILL.md",
+          content: "# Reviewer\n",
+        }),
+      });
+      const saveTelegram = await fetch(`${baseUrl}/api/optidev/telegram-config`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          botToken: "token-123",
+          chatId: "42",
+        }),
+      });
+      const readTelegram = await fetch(`${baseUrl}/api/optidev/telegram-config`);
+
+      const saveFileBody = (await saveFile.json()) as { ok: boolean; lines: string[] };
+      const saveTelegramBody = (await saveTelegram.json()) as {
+        ok: boolean;
+        data: { botToken: string; chatId: string };
+      };
+      const readTelegramBody = (await readTelegram.json()) as {
+        ok: boolean;
+        data: { botToken: string; chatId: string };
+      };
+
+      expect(saveFile.status).toBe(200);
+      expect(saveFileBody.lines[0]).toContain("Saved reviewer/SKILL.md.");
+      expect(
+        fs.readFileSync(path.join(repoRoot, ".agents", "agents", "reviewer", "SKILL.md"), "utf8"),
+      ).toContain("# Reviewer");
+
+      expect(saveTelegram.status).toBe(200);
+      expect(saveTelegramBody.data).toEqual({ botToken: "token-123", chatId: "42" });
+      expect(readTelegramBody.data).toEqual({ botToken: "token-123", chatId: "42" });
+      expect(fs.readFileSync(path.join(homeDir, "config.yaml"), "utf8")).toContain("telegram_bot_token");
     });
   });
 

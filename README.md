@@ -2,11 +2,22 @@
 
 A local CLI workspace orchestrator for AI coding sessions.
 
+Main flows:
+
+- `optid` starts the shipped `t3code` + OptiDev UI bundle
+- `optid start <project>` bootstraps or restores an OptiDev workspace for a repository
+- `optid t3code refresh --dry-run --allow-dirty` shows how the vendored upstream refresh would replay onto the current `./ui/`
+- pull requests targeting `main` run the repository-owned validation suite before merge, and merges to `main` bump the shipped product version
+
 ## Current Status
 MVP is implemented and tested.
 
 Available commands:
 
+- `optid` (start the bundled `t3code` + OptiDev UI)
+- `optid ui` (same as `optid`)
+- `optid --version`
+- `optid t3code [status|bootstrap|refresh]`
 - `optid start <project> [--advice]`
 - `optid start [--advice]` (from current project directory)
 - `optid init <name|.>`
@@ -46,8 +57,9 @@ Before installation:
 
 - `bash`
 - `bun` `1.3+` (required)
-- `git` (required only if installer needs to clone)
+- `node` `24+` (required for bundled UI build/start flows)
 - `curl` (required for `curl | bash` install flow)
+- `tar` (required for Unix release install extraction)
 - `zellij` (optional runtime backend)
 - `fresh` editor CLI (recommended for the editor tab)
 - `Codex` CLI (primary recommended agent runner)
@@ -91,18 +103,25 @@ Default install command:
 curl -fsSL https://raw.githubusercontent.com/dimkk/optistart/main/scripts/install.sh | bash
 ```
 
+### Remote install via PowerShell
+
+```powershell
+powershell -ExecutionPolicy Bypass -Command "iwr https://raw.githubusercontent.com/dimkk/optistart/main/scripts/install.ps1 -UseBasicParsing | iex"
+```
+
 Optional override (for fork/private mirror):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/dimkk/optistart/main/scripts/install.sh | OPTID_GIT_URL=<YOUR_GIT_URL> bash
+curl -fsSL https://raw.githubusercontent.com/dimkk/optistart/main/scripts/install.sh | OPTID_MANIFEST_URL=<YOUR_MANIFEST_URL> bash
 ```
 
 Installer behavior:
 
 1. If local repo layout is detected, it uses local files only.
-2. If local repo is not detected, it clones/pulls from `https://github.com/dimkk/optistart` (or `OPTID_GIT_URL` if overridden).
-3. It installs Bun workspace dependencies under `./ui/`.
-4. It links `optid` into `~/.local/bin` and adds PATH export automatically.
+2. If local repo is not detected, it resolves the current product version from `scripts/release-manifest.json` on `main`.
+3. It downloads the tagged source snapshot for that version into a versioned install layout under `~/.optidev/optistart/releases/`.
+4. It installs Bun workspace dependencies and builds the bundled `t3code` + OptiDev UI.
+5. It exposes a stable `optid` launcher and adds PATH export automatically.
 
 ## T3 Fork UI
 
@@ -119,8 +138,7 @@ bun run build
 Then start the built forked `t3` server from the vendored workspace:
 
 ```bash
-cd /home/dimkk/new-proj/optistart/ui/apps/server
-T3CODE_NO_BROWSER=true bun run start
+optid
 ```
 
 The forked server handles `/api/optidev/*` natively inside the `TS/Bun` runtime. Workspace state, memory, startup, lifecycle, and embedded plugin actions no longer depend on a Python bridge on the browser path.
@@ -143,6 +161,11 @@ The forked OptiDev route exposes:
 ## Quick Start
 
 ```bash
+optid
+optid ui
+optid --version
+optid t3code status
+optid t3code refresh --dry-run --allow-dirty
 optid go demo --advice
 optid telegram start
 optid start demo
@@ -158,8 +181,16 @@ optid stop
 If your shell has not reloaded PATH yet, use:
 
 ```bash
-~/.local/bin/optid status
+~/.local/bin/optid
 ```
+
+Installed release launch behavior:
+
+- `optid` starts the bundled `t3code` + OptiDev UI
+- `optid ui` is an explicit alias for the same bundled UI launch
+- `optid t3code ...` exposes vendored upstream maintenance without calling internal script paths directly
+- `optid status`, `optid start`, and the rest of the native commands still delegate to the Bun CLI runtime
+- installed releases check the latest remote tag and print an upgrade suggestion when a newer release exists
 
 ## Workspace Manifest
 
@@ -458,11 +489,10 @@ Behavior:
 ## Tests
 
 ```bash
-cd ui/apps/server && bun run test -- src/optidevCli.test.ts src/optidevCliShim.test.ts src/optidevNative.test.ts src/optidevMemory.test.ts src/optidevPersistence.test.ts src/optidevLifecycle.test.ts src/optidevStartup.test.ts src/optidevPlugins.test.ts src/optidevRoute.test.ts
-cd ui/apps/web && bun run test:browser -- src/routes/-optidev.browser.tsx
+bash scripts/run-main-pr-checks.sh
 ```
 
-Current suite status: native `t3` server/browser OptiDev suites passing.
+`scripts/run-main-pr-checks.sh` is the shared validation surface used by pull requests targeting `main` and by release bump automation after merge.
 
 ## Guide
 

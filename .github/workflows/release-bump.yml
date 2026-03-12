@@ -1,0 +1,57 @@
+name: Release Bump
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  bump-and-tag:
+    if: ${{ !contains(github.event.head_commit.message, '[skip release bump]') }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.9
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Run repository validation
+        run: bash scripts/run-main-pr-checks.sh
+
+      - name: Apply version bump
+        id: release_meta
+        shell: bash
+        run: |
+          node scripts/prepare-release.mjs bump --apply > release-meta.json
+          cat release-meta.json
+          version="$(node -e 'const fs=require("node:fs"); const data=JSON.parse(fs.readFileSync("release-meta.json","utf8")); process.stdout.write(data.version)')"
+          tag="$(node -e 'const fs=require("node:fs"); const data=JSON.parse(fs.readFileSync("release-meta.json","utf8")); process.stdout.write(data.tag)')"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Commit version bump
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add scripts/release-manifest.json ui/apps/server/package.json ui/apps/web/package.json ui/apps/desktop/package.json ui/apps/marketing/package.json ui/packages/contracts/package.json ui/packages/shared/package.json
+          git commit -m "chore(release): prepare ${{ steps.release_meta.outputs.tag }} [skip release bump]"
+
+      - name: Create tag
+        run: git tag "${{ steps.release_meta.outputs.tag }}"
+
+      - name: Push commit and tag
+        run: git push origin HEAD:main --follow-tags

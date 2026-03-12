@@ -1,6 +1,7 @@
 import {
   ChevronRightIcon,
   FolderIcon,
+  FolderOpenIcon,
   GitPullRequestIcon,
   RocketIcon,
   SquarePenIcon,
@@ -17,7 +18,7 @@ import {
   type ResolvedKeybindingsConfig,
 } from "@t3tools/contracts";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useNavigate, useParams } from "@tanstack/react-router";
+import { useNavigate, useParams, useRouterState } from "@tanstack/react-router";
 import { useAppSettings } from "../appSettings";
 import { isElectron } from "../env";
 import { APP_STAGE_LABEL } from "../branding";
@@ -278,6 +279,7 @@ export default function Sidebar() {
     (store) => store.clearProjectDraftThreadById,
   );
   const navigate = useNavigate();
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
   const { settings: appSettings } = useAppSettings();
   const routeThreadId = useParams({
     strict: false,
@@ -1024,6 +1026,25 @@ export default function Sidebar() {
       )}
 
       <SidebarContent className="gap-0">
+        <SidebarGroup className="px-2 pb-0 pt-2">
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                data-testid="sidebar-optidev"
+                size="sm"
+                className="gap-2 px-2 py-1.5 text-left"
+                data-active={pathname === "/optidev"}
+                onClick={() => {
+                  void navigate({ to: "/optidev" });
+                }}
+              >
+                <FolderOpenIcon className="size-3.5 shrink-0" />
+                <span className="truncate">OptiDev Workspace</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          </SidebarMenu>
+        </SidebarGroup>
+
         <SidebarGroup className="px-2 py-2">
           <SidebarMenu>
             {projects.map((project) => {

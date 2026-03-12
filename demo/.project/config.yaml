@@ -1,0 +1,12 @@
+{
+  "dev": {
+    "start": []
+  },
+  "tests": {
+    "command": null,
+    "watch": []
+  },
+  "logs": {
+    "sources": []
+  }
+}

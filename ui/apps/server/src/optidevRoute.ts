@@ -1,4 +1,5 @@
-import type { ServerResponse } from "node:http";
+import fs from "node:fs/promises";
+import type { IncomingMessage, ServerResponse } from "node:http";
 
 import {
   type OptiDevActionPayload,
@@ -30,6 +31,13 @@ import {
   nativeStartAction,
 } from "./optidevStartup";
 import { nativePluginAction, supportsNativePluginCommand } from "./optidevPlugins";
+import {
+  listScopedDirectory,
+  readScopedFile,
+  readScopedRawFile,
+  writeScopedTextFile,
+} from "./optidevFiles";
+import { readTelegramConfig, writeTelegramConfig } from "./optidevConfig";
 
 export type { OptiDevActionPayload, OptiDevActionResponse } from "./optidevContract";
 export { resolveOptiDevProjectRoot } from "./optidevContract";
@@ -37,6 +45,19 @@ export { resolveOptiDevProjectRoot } from "./optidevContract";
 function json(res: ServerResponse, statusCode: number, payload: unknown) {
   const body = JSON.stringify(payload);
   res.writeHead(statusCode, { "Content-Type": "application/json" });
+  res.end(body);
+}
+
+function sendRaw(
+  res: ServerResponse,
+  statusCode: number,
+  contentType: string,
+  body: Buffer,
+) {
+  res.writeHead(statusCode, {
+    "Content-Type": contentType,
+    "Content-Length": String(body.byteLength),
+  });
   res.end(body);
 }
 
@@ -236,11 +257,14 @@ async function runOptiDevAction(
 }
 
 export async function tryHandleOptiDevRequest(
+  req: IncomingMessage,
   url: URL,
   reqBody: string,
   res: ServerResponse,
   context: OptiDevRouteContext,
 ): Promise<boolean> {
+  const method = (req.method ?? "GET").toUpperCase();
+
   if (url.pathname === "/api/optidev/health") {
     json(res, 200, {
       ok: true,
@@ -252,6 +276,121 @@ export async function tryHandleOptiDevRequest(
   if (url.pathname === "/api/optidev/state") {
     const result = await runOptiDevAction("state", {}, context);
     json(res, result.ok ? 200 : 400, result);
+    return true;
+  }
+
+  if (url.pathname === "/api/optidev/fs/list") {
+    try {
+      const scope = (url.searchParams.get("scope") ?? "repo") as OptiDevActionPayload["scope"];
+      const relativePath = url.searchParams.get("path") ?? "";
+      if (scope !== "repo" && scope !== "agents" && scope !== "skills") {
+        json(res, 400, { ok: false, lines: ["Unsupported file scope."] });
+        return true;
+      }
+      const data = await listScopedDirectory(context, scope, relativePath);
+      json(res, 200, { ok: true, lines: [], data });
+    } catch (error) {
+      json(res, 400, toErrorResponse(error, "Failed to list OptiDev files."));
+    }
+    return true;
+  }
+
+  if (url.pathname === "/api/optidev/fs/read") {
+    try {
+      const scope = (url.searchParams.get("scope") ?? "repo") as OptiDevActionPayload["scope"];
+      const relativePath = url.searchParams.get("path") ?? "";
+      if (scope !== "repo" && scope !== "agents" && scope !== "skills") {
+        json(res, 400, { ok: false, lines: ["Unsupported file scope."] });
+        return true;
+      }
+      const data = await readScopedFile(context, scope, relativePath);
+      json(res, 200, { ok: true, lines: [], data });
+    } catch (error) {
+      json(res, 400, toErrorResponse(error, "Failed to read OptiDev file."));
+    }
+    return true;
+  }
+
+  if (url.pathname === "/api/optidev/fs/raw") {
+    try {
+      const scope = (url.searchParams.get("scope") ?? "repo") as OptiDevActionPayload["scope"];
+      const relativePath = url.searchParams.get("path") ?? "";
+      if (scope !== "repo" && scope !== "agents" && scope !== "skills") {
+        json(res, 400, { ok: false, lines: ["Unsupported file scope."] });
+        return true;
+      }
+      const raw = await readScopedRawFile(context, scope, relativePath);
+      const body = await fs.readFile(raw.filePath);
+      sendRaw(res, 200, raw.contentType, body);
+    } catch (error) {
+      json(res, 400, toErrorResponse(error, "Failed to stream OptiDev file."));
+    }
+    return true;
+  }
+
+  if (url.pathname === "/api/optidev/fs/write") {
+    if (method !== "POST" && method !== "PUT") {
+      json(res, 405, { ok: false, lines: ["Method not allowed."] });
+      return true;
+    }
+    let payload: OptiDevActionPayload = {};
+    if (reqBody.trim().length > 0) {
+      try {
+        payload = JSON.parse(reqBody) as OptiDevActionPayload;
+      } catch {
+        json(res, 400, { ok: false, lines: ["Invalid JSON body."] });
+        return true;
+      }
+    }
+    const scope = payload.scope;
+    if (scope !== "agents" && scope !== "skills") {
+      json(res, 400, { ok: false, lines: ["Only agent and skill files are editable."] });
+      return true;
+    }
+    try {
+      const data = await writeScopedTextFile(context, scope, payload.path ?? "", payload.content ?? "");
+      json(res, 200, { ok: true, lines: [`Saved ${data.path}.`], data });
+    } catch (error) {
+      json(res, 400, toErrorResponse(error, "Failed to save OptiDev file."));
+    }
+    return true;
+  }
+
+  if (url.pathname === "/api/optidev/telegram-config") {
+    if (method === "GET") {
+      try {
+        const data = await readTelegramConfig(context);
+        json(res, 200, { ok: true, lines: [], data });
+      } catch (error) {
+        json(res, 400, toErrorResponse(error, "Failed to read Telegram config."));
+      }
+      return true;
+    }
+
+    if (method !== "POST" && method !== "PUT") {
+      json(res, 405, { ok: false, lines: ["Method not allowed."] });
+      return true;
+    }
+
+    let payload: OptiDevActionPayload = {};
+    if (reqBody.trim().length > 0) {
+      try {
+        payload = JSON.parse(reqBody) as OptiDevActionPayload;
+      } catch {
+        json(res, 400, { ok: false, lines: ["Invalid JSON body."] });
+        return true;
+      }
+    }
+
+    try {
+      const data = await writeTelegramConfig(context, {
+        botToken: String(payload.botToken ?? ""),
+        chatId: String(payload.chatId ?? ""),
+      });
+      json(res, 200, { ok: true, lines: ["Telegram settings saved."], data });
+    } catch (error) {
+      json(res, 400, toErrorResponse(error, "Failed to save Telegram config."));
+    }
     return true;
   }
 

@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "productName": "optid",
+  "version": "0.0.4-alpha.1",
+  "repository": {
+    "url": "https://github.com/dimkk/optistart",
+    "gitUrl": "https://github.com/dimkk/optistart.git"
+  },
+  "install": {
+    "archiveBaseUrl": "https://github.com/dimkk/optistart/archive/refs/tags",
+    "unixScriptUrl": "https://raw.githubusercontent.com/dimkk/optistart/main/scripts/install.sh",
+    "windowsScriptUrl": "https://raw.githubusercontent.com/dimkk/optistart/main/scripts/install.ps1"
+  },
+  "update": {
+    "checkIntervalMinutes": 720
+  }
+}

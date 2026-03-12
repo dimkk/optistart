@@ -146,8 +146,11 @@ describe("optidevNative", () => {
 
     expect(response.ok).toBe(true);
     expect(response.lines).toEqual([]);
+    expect(response.state?.repoRoot).toBe("/repo");
     expect(response.state?.status).toContain("Project: demo");
     expect(response.state?.memorySummary).toEqual(["Memory summary"]);
+    expect(response.state?.session.project).toBe("demo");
+    expect(response.state?.session.runner).toBe("codex");
     expect(response.state?.projects).toEqual(
       expect.arrayContaining([{ name: "demo", path: path.join(homeDir, "projects", "demo") }]),
     );

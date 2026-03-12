@@ -9,17 +9,12 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as OptidevRouteImport } from './routes/optidev'
 import { Route as ChatRouteImport } from './routes/_chat'
 import { Route as ChatIndexRouteImport } from './routes/_chat.index'
 import { Route as ChatSettingsRouteImport } from './routes/_chat.settings'
+import { Route as ChatOptidevRouteImport } from './routes/_chat.optidev'
 import { Route as ChatThreadIdRouteImport } from './routes/_chat.$threadId'
 
-const OptidevRoute = OptidevRouteImport.update({
-  id: '/optidev',
-  path: '/optidev',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const ChatRoute = ChatRouteImport.update({
   id: '/_chat',
   getParentRoute: () => rootRouteImport,
@@ -34,6 +29,11 @@ const ChatSettingsRoute = ChatSettingsRouteImport.update({
   path: '/settings',
   getParentRoute: () => ChatRoute,
 } as any)
+const ChatOptidevRoute = ChatOptidevRouteImport.update({
+  id: '/optidev',
+  path: '/optidev',
+  getParentRoute: () => ChatRoute,
+} as any)
 const ChatThreadIdRoute = ChatThreadIdRouteImport.update({
   id: '/$threadId',
   path: '/$threadId',
@@ -42,52 +42,44 @@ const ChatThreadIdRoute = ChatThreadIdRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof ChatIndexRoute
-  '/optidev': typeof OptidevRoute
   '/$threadId': typeof ChatThreadIdRoute
+  '/optidev': typeof ChatOptidevRoute
   '/settings': typeof ChatSettingsRoute
 }
 export interface FileRoutesByTo {
-  '/optidev': typeof OptidevRoute
   '/$threadId': typeof ChatThreadIdRoute
+  '/optidev': typeof ChatOptidevRoute
   '/settings': typeof ChatSettingsRoute
   '/': typeof ChatIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_chat': typeof ChatRouteWithChildren
-  '/optidev': typeof OptidevRoute
   '/_chat/$threadId': typeof ChatThreadIdRoute
+  '/_chat/optidev': typeof ChatOptidevRoute
   '/_chat/settings': typeof ChatSettingsRoute
   '/_chat/': typeof ChatIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/optidev' | '/$threadId' | '/settings'
+  fullPaths: '/' | '/$threadId' | '/optidev' | '/settings'
   fileRoutesByTo: FileRoutesByTo
-  to: '/optidev' | '/$threadId' | '/settings' | '/'
+  to: '/$threadId' | '/optidev' | '/settings' | '/'
   id:
     | '__root__'
     | '/_chat'
-    | '/optidev'
     | '/_chat/$threadId'
+    | '/_chat/optidev'
     | '/_chat/settings'
     | '/_chat/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   ChatRoute: typeof ChatRouteWithChildren
-  OptidevRoute: typeof OptidevRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/optidev': {
-      id: '/optidev'
-      path: '/optidev'
-      fullPath: '/optidev'
-      preLoaderRoute: typeof OptidevRouteImport
-      parentRoute: typeof rootRouteImport
-    }
     '/_chat': {
       id: '/_chat'
       path: ''
@@ -109,6 +101,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ChatSettingsRouteImport
       parentRoute: typeof ChatRoute
     }
+    '/_chat/optidev': {
+      id: '/_chat/optidev'
+      path: '/optidev'
+      fullPath: '/optidev'
+      preLoaderRoute: typeof ChatOptidevRouteImport
+      parentRoute: typeof ChatRoute
+    }
     '/_chat/$threadId': {
       id: '/_chat/$threadId'
       path: '/$threadId'
@@ -121,12 +120,14 @@ declare module '@tanstack/react-router' {
 
 interface ChatRouteChildren {
   ChatThreadIdRoute: typeof ChatThreadIdRoute
+  ChatOptidevRoute: typeof ChatOptidevRoute
   ChatSettingsRoute: typeof ChatSettingsRoute
   ChatIndexRoute: typeof ChatIndexRoute
 }
 
 const ChatRouteChildren: ChatRouteChildren = {
   ChatThreadIdRoute: ChatThreadIdRoute,
+  ChatOptidevRoute: ChatOptidevRoute,
   ChatSettingsRoute: ChatSettingsRoute,
   ChatIndexRoute: ChatIndexRoute,
 }
@@ -135,7 +136,6 @@ const ChatRouteWithChildren = ChatRoute._addFileChildren(ChatRouteChildren)
 
 const rootRouteChildren: RootRouteChildren = {
   ChatRoute: ChatRouteWithChildren,
-  OptidevRoute: OptidevRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
