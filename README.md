@@ -134,7 +134,8 @@ curl -fsSL https://raw.githubusercontent.com/dimkk/optistart/test/scripts/instal
 ```
 
 ```powershell
-iwr https://raw.githubusercontent.com/dimkk/optistart/test/scripts/install.ps1 -UseBasicParsing | iex
+$env:OPTID_GIT_REF='test'
+irm https://raw.githubusercontent.com/dimkk/optistart/test/scripts/install.ps1 | iex
 ```
 
 Unix/macOS:
@@ -170,7 +171,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
 How it works:
 
 - stable remote install with no extra env vars still resolves the tagged release flow from `main`
-- nightly remote install can use the test-branch installer directly from `origin/test`
+- nightly remote install should set `OPTID_GIT_REF=test`, so the installer downloads the branch snapshot from `origin/test` instead of a tagged stable archive
 - local-repo install still works the same way after a `git clone --branch test`
 
 Optional override (for fork/private mirror):

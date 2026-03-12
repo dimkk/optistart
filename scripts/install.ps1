@@ -20,9 +20,11 @@ function Resolve-LocalRepo {
     return (Resolve-Path ".").Path
   }
 
-  $scriptRepo = Resolve-Path (Join-Path $PSScriptRoot "..")
-  if ((Test-Path (Join-Path $scriptRepo "scripts\optid.ps1")) -and (Test-Path (Join-Path $scriptRepo "ui\apps\server"))) {
-    return $scriptRepo.Path
+  if ($PSScriptRoot -and $PSScriptRoot.Trim().Length -gt 0) {
+    $scriptRepo = Resolve-Path (Join-Path $PSScriptRoot "..")
+    if ((Test-Path (Join-Path $scriptRepo "scripts\optid.ps1")) -and (Test-Path (Join-Path $scriptRepo "ui\apps\server"))) {
+      return $scriptRepo.Path
+    }
   }
 
   return $null
