@@ -3,6 +3,7 @@ $ErrorActionPreference = "Stop"
 $BinDir = if ($env:OPTID_BIN_DIR) { $env:OPTID_BIN_DIR } else { Join-Path $env:LOCALAPPDATA "optid\bin" }
 $InstallRoot = if ($env:OPTID_INSTALL_DIR) { $env:OPTID_INSTALL_DIR } else { Join-Path $HOME ".optidev\optistart" }
 $ManifestUrl = if ($env:OPTID_MANIFEST_URL) { $env:OPTID_MANIFEST_URL } else { "https://raw.githubusercontent.com/dimkk/optistart/main/scripts/release-manifest.json" }
+$GitRef = if ($env:OPTID_GIT_REF) { $env:OPTID_GIT_REF } else { $null }
 
 function Fail($Message) {
   throw "install.ps1 error: $Message"
@@ -95,6 +96,57 @@ function Install-ReleaseSnapshot {
   return $currentDir
 }
 
+function Get-SafeRefName {
+  param([string]$RefName)
+
+  return ($RefName -replace "[/\\:\s]", "-")
+}
+
+function Install-BranchSnapshot {
+  param(
+    [string]$ManifestUrl,
+    [string]$InstallRoot,
+    [string]$GitRef
+  )
+
+  $manifest = Invoke-RestMethod -Uri $ManifestUrl -UseBasicParsing
+  $safeRef = Get-SafeRefName $GitRef
+  $branchDir = Join-Path $InstallRoot "branches\$safeRef"
+  $currentDir = Join-Path $InstallRoot "current"
+  $zipUrl = "$($manifest.repository.url)/archive/refs/heads/$GitRef.zip"
+
+  if (-not (Test-Path $branchDir)) {
+    $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("optid-branch-" + [System.Guid]::NewGuid())
+    $zipPath = Join-Path $tempDir "optid-branch.zip"
+    New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
+    New-Item -ItemType Directory -Force -Path $branchDir | Out-Null
+
+    Write-Host "Downloading branch snapshot: $zipUrl"
+    Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing
+    Expand-Archive -Path $zipPath -DestinationPath $tempDir -Force
+
+    $expandedRoot = Get-ChildItem $tempDir -Directory | Where-Object { $_.Name -ne "branches" } | Select-Object -First 1
+    if (-not $expandedRoot) {
+      Fail "failed to extract branch archive"
+    }
+
+    Get-ChildItem $expandedRoot.FullName -Force | ForEach-Object {
+      Move-Item $_.FullName $branchDir -Force
+    }
+  } else {
+    Write-Host "Using existing branch directory: $branchDir"
+  }
+
+  Install-BunDepsAndBuild $branchDir
+
+  New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
+  if (Test-Path $currentDir) {
+    Remove-Item $currentDir -Recurse -Force
+  }
+  New-Item -ItemType Junction -Path $currentDir -Target $branchDir | Out-Null
+  return $currentDir
+}
+
 function Write-WindowsShim {
   param(
     [string]$CurrentDir,
@@ -136,7 +188,12 @@ if ($repoDir) {
   Write-Host "Using local repository: $repoDir"
   Install-BunDepsAndBuild $repoDir
 } else {
-  $repoDir = Install-ReleaseSnapshot -ManifestUrl $ManifestUrl -InstallRoot $InstallRoot
+  if ($GitRef) {
+    Write-Host "Installing branch snapshot: $GitRef"
+    $repoDir = Install-BranchSnapshot -ManifestUrl $ManifestUrl -InstallRoot $InstallRoot -GitRef $GitRef
+  } else {
+    $repoDir = Install-ReleaseSnapshot -ManifestUrl $ManifestUrl -InstallRoot $InstallRoot
+  }
 }
 
 Write-WindowsShim -CurrentDir $repoDir -BinDir $BinDir

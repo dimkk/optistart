@@ -4,6 +4,7 @@ set -euo pipefail
 BIN_DIR="${OPTID_BIN_DIR:-$HOME/.local/bin}"
 INSTALL_ROOT="${OPTID_INSTALL_DIR:-$HOME/.optidev/optistart}"
 MANIFEST_URL="${OPTID_MANIFEST_URL:-https://raw.githubusercontent.com/dimkk/optistart/main/scripts/release-manifest.json}"
+GIT_REF="${OPTID_GIT_REF:-}"
 SCRIPT_DIR="$(cd -P "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 PROFILE_FILES=()
 
@@ -111,6 +112,10 @@ fetch_release_manifest() {
   curl -fsSL "$MANIFEST_URL" -o "$target"
 }
 
+sanitize_ref_name() {
+  printf '%s' "$1" | tr '/:\\ ' '----'
+}
+
 json_field() {
   local file="$1"
   local expression="$2"
@@ -163,6 +168,45 @@ install_remote_release() {
   printf '%s' "$current_link"
 }
 
+resolve_branch_archive_url() {
+  local manifest_file="$1"
+  local git_ref="$2"
+  local repository_url
+  repository_url="$(json_field "$manifest_file" "data.repository.url")"
+  printf '%s/archive/refs/heads/%s.tar.gz' "$repository_url" "$git_ref"
+}
+
+install_remote_branch_snapshot() {
+  local manifest_file="$1"
+  local git_ref="$2"
+  local archive_url="$3"
+  local branches_dir="$INSTALL_ROOT/branches"
+  local safe_ref
+  safe_ref="$(sanitize_ref_name "$git_ref")"
+  local branch_dir="$branches_dir/$safe_ref"
+  local current_link="$INSTALL_ROOT/current"
+
+  mkdir -p "$branches_dir"
+
+  if [[ ! -d "$branch_dir" ]]; then
+    local tmp_dir archive_path
+    tmp_dir="$(mktemp -d)"
+    archive_path="$tmp_dir/optid-branch.tar.gz"
+
+    printf 'Downloading branch snapshot: %s\n' "$archive_url"
+    curl -fsSL "$archive_url" -o "$archive_path"
+    mkdir -p "$branch_dir"
+    tar -xzf "$archive_path" -C "$branch_dir" --strip-components=1
+  else
+    printf 'Using existing branch directory: %s\n' "$branch_dir"
+  fi
+
+  install_bun_deps "$branch_dir"
+  mkdir -p "$INSTALL_ROOT"
+  ln -sfn "$branch_dir" "$current_link"
+  printf '%s' "$current_link"
+}
+
 main() {
   require_build_cmds
 
@@ -176,10 +220,16 @@ main() {
     local manifest_file version archive_url
     manifest_file="$(mktemp)"
     fetch_release_manifest "$manifest_file"
-    version="$(resolve_release_version "$manifest_file")"
-    archive_url="$(resolve_release_archive_url "$manifest_file" "$version")"
-    printf 'Installing release version: v%s\n' "$version"
-    repo_dir="$(install_remote_release "$manifest_file" "$version" "$archive_url")"
+    if [[ -n "$GIT_REF" ]]; then
+      archive_url="$(resolve_branch_archive_url "$manifest_file" "$GIT_REF")"
+      printf 'Installing branch snapshot: %s\n' "$GIT_REF"
+      repo_dir="$(install_remote_branch_snapshot "$manifest_file" "$GIT_REF" "$archive_url")"
+    else
+      version="$(resolve_release_version "$manifest_file")"
+      archive_url="$(resolve_release_archive_url "$manifest_file" "$version")"
+      printf 'Installing release version: v%s\n' "$version"
+      repo_dir="$(install_remote_release "$manifest_file" "$version" "$archive_url")"
+    fi
     should_bootstrap_repo=0
   fi
 

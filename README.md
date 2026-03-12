@@ -125,6 +125,16 @@ powershell -ExecutionPolicy Bypass -Command "iwr https://raw.githubusercontent.c
 
 Use this path when you want the current pre-release branch state instead of the stable/tagged install flow from `main`.
 
+Remote one-liners:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/dimkk/optistart/main/scripts/install.sh | OPTID_GIT_REF=test bash
+```
+
+```powershell
+powershell -ExecutionPolicy Bypass -Command "$env:OPTID_GIT_REF='test'; iwr https://raw.githubusercontent.com/dimkk/optistart/main/scripts/install.ps1 -UseBasicParsing | iex"
+```
+
 Unix/macOS:
 
 ```bash
@@ -155,7 +165,11 @@ git pull origin test
 powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
 ```
 
-Use the local-repo installer for nightly builds because the remote `curl` / `Invoke-WebRequest` installer path resolves the stable release manifest and tagged release archives by default.
+How it works:
+
+- stable remote install with no extra env vars still resolves the tagged release flow from `main`
+- nightly remote install sets `OPTID_GIT_REF=test`, so the installer downloads the branch snapshot from `origin/test` instead of a tagged archive
+- local-repo install still works the same way after a `git clone --branch test`
 
 Optional override (for fork/private mirror):
 
