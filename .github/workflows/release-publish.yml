@@ -1,0 +1,65 @@
+name: Release Publish
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version, for example 0.0.5"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release version
+        id: release_meta
+        shell: bash
+        run: |
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            version="${{ github.event.inputs.version }}"
+            tag="v${version#v}"
+          else
+            tag="${GITHUB_REF_NAME}"
+            version="${tag#v}"
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+          if [[ "$version" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Prepare release assets
+        shell: bash
+        run: |
+          mkdir -p release
+          prefix="optid-${{ steps.release_meta.outputs.version }}"
+          git archive --format=tar.gz --prefix="$prefix/" -o "release/${prefix}.tar.gz" "${{ steps.release_meta.outputs.tag }}"
+          git archive --format=zip --prefix="$prefix/" -o "release/${prefix}.zip" "${{ steps.release_meta.outputs.tag }}"
+          cp scripts/install.sh "release/install.sh"
+          cp scripts/install.ps1 "release/install.ps1"
+          cp scripts/release-manifest.json "release/release-manifest.json"
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release_meta.outputs.tag }}
+          generate_release_notes: true
+          prerelease: ${{ steps.release_meta.outputs.prerelease == 'true' }}
+          files: |
+            release/*

@@ -1,588 +1,239 @@
-
 # AGENTS
 
-This repository uses **agent‑driven development** and is designed to work with AI coding agents
-(Codex, Claude Code, OpenCode) inside the **OptiDev workspace orchestrator**.
+This repository is built with agent-driven development inside the OptiDev workspace.
 
-The workflow enforces strict rules for:
-- task planning
-- atomic feature implementation
-- documentation
-- testing
-- release packaging
-- git promotion
+The goal of this file is to keep control points strict while reducing documentation overhead.
 
----
+## Repository Contract
 
-# Project Context
+Root markdown policy:
+- allowed in root: `AGENTS.md`, `README.md`
 
-Repository root file policy:
+Scripts:
+- all executable or utility scripts must live in `./scripts/`
 
-- Allowed markdown files in root: `AGENTS.md`, `README.md`.
-- Executable/utility scripts must be stored only in:
-
-```
-./scripts/
-```
-
-Agent configuration paths:
-
-```
+Agent assets:
+```text
 .agents/
   agents/
   skills/
   mcp/
 ```
 
-Example absolute path:
+Implementation reports:
+- all task reports live in `./tasks-log/`
 
-```
-opticlaw/.agents/
-```
+Task planning docs:
+- all task dossiers live in `./docs/tasks/`
 
-Contents:
+Obsolete docs:
+- historical or superseded docs must move to `./docs/obsolete/`
+- active contributor guidance should stay in live `./docs/` paths
 
-```
-.agents/
-  agents/      -> agent definitions
-  skills/      -> reusable capability guides
-  mcp/         -> MCP tool configs
-```
+## Current Release
 
----
-
-# Work Flow
-
-## Initial Task Creation
-
-First meaningful task:
-
-```
-./docs/tasks/task1-init.md
+Current approved release:
+```text
+docs/v1-2/features-matrix.md
+docs/v1-2/test-matrix.md
 ```
 
-Architecture proposal:
+Version rule:
+- do not create a new release unless the user explicitly asks for it
+- if the user does not specify a new release, continue appending to the current approved release
 
-```
-./docs/tasks/task1-init-arc.md
-```
+## Workflow
 
-Feature breakdown:
-
-```
-./docs/tasks/task1-init-features.md
-```
-
-Feature test plan:
-
-```
-./docs/tasks/task1-init-features-tests.md
+Compact workflow:
+```text
+task dossier -> approval -> atomic features -> tests -> report
 ```
 
-Workflow:
-
-```
-task -> architecture -> features -> tests -> implementation
-```
-
-Strict execution order:
-
-1. Create/refresh `task` document.
-2. Create architecture document.
-3. Create feature breakdown document.
-4. Create feature tests document.
-5. Wait for required human approvals.
-6. Only then start atomic feature lifecycle.
-
-Human approval required for:
-
-```
-architecture
-features
+For any non-trivial task, create or refresh one task dossier:
+```text
+docs/tasks/taskN.md
 ```
 
-Optional approval:
+The task dossier must contain these sections:
+- goal
+- architecture
+- atomic features
+- test plan
+- approvals / notes
 
-```
-tests
-```
+This replaces the old split into:
+- `*-arc.md`
+- `*-features.md`
+- `*-features-tests.md`
+
+Those files are no longer required for new work.
+
+Approval rule:
+- human approval is required for the task dossier before implementation when the task is architectural, cross-cutting, or multi-feature
+- for a small isolated fix, a separate approval round is not required if the user already clearly asked to proceed
 
 Hard gate:
+- do not start non-trivial implementation until the task dossier exists
 
-- Atomic implementation work is **not allowed** before steps `architecture -> features -> tests` are documented.
-- If architecture/features are not approved, agent must stop after documentation and request approval.
+## Source Of Truth
 
----
-
-# Atomic Feature Flow (Mandatory)
-
-Execution source of truth:
-
-```
-./docs/<release>/features-matrix.md
-./docs/<release>/test-matrix.md
+The current release matrices are the main execution control files:
+```text
+docs/v1-2/features-matrix.md
+docs/v1-2/test-matrix.md
 ```
 
-Example for current release:
-
-```
-./docs/v1-0/features-matrix.md
-./docs/v1-0/test-matrix.md
-```
-
-These files define:
-
-- atomic features
-- status
+They define:
+- atomic feature IDs
+- feature status
 - test mapping
 
-Agents must implement **one atomic feature lifecycle at a time** unless parallel execution is explicitly requested.
+If matrices and a feature doc disagree, matrices win.
 
----
+Reality-check rule:
+- do not silently narrow explicit user requirements such as "all", "open", "running", "latest", or "live" into a persisted subset without saying so
+- when implementation depends on a runtime source of truth, verify against the real runtime path and not only seeded/unit fixtures before considering the task done
+- if a requirement can reasonably map to more than one source of truth, ask the user or explicitly call out the assumption before shipping
 
-# Atomic Feature Lifecycle
+## Atomic Feature Lifecycle
 
-1. Pick atomic feature ID from:
+Default rule:
+- implement one atomic feature lifecycle at a time unless the user explicitly asks for parallel work
 
-```
-docs/<release>/features-matrix.md
-```
+Lifecycle:
+1. pick a feature ID from `docs/v1-2/features-matrix.md`
+2. set status to `DESCRIBING` or `DEVELOPING` as appropriate
+3. create feature documentation only if the feature changes a durable contract
+4. update `docs/v1-2/test-matrix.md`
+5. implement
+6. add or update tests
+7. run tests until green
+8. set status to `DONE`
+9. write or update the task report in `tasks-log/`
 
-2. Set feature status:
+## Feature Docs
 
-```
-DESCRIBING
-```
+Feature docs are now selective, not mandatory for every small change.
 
-3. Create feature documentation:
+Create a feature doc when the change affects:
+- plugin API
+- manifest schema
+- runner contract
+- storage schema
+- workspace layout contract
+- external integration contract
+- persistent repository process contract
 
-```
+Feature doc location:
+```text
 docs/features/<component-id>/<feature-id>/
 ```
 
-Example:
-
-```
-docs/features/orc/orc-run-014/orc-run-014-agent-runner.md
-```
-
-Mandatory sections:
-
-- description
-- current implementation state
-- implementation plan
-
-4. Update tests matrix:
-
-```
-docs/<release>/test-matrix.md
-```
-
-5. Change status:
-
-```
-DEVELOPING
-```
-
-6. Implement feature.
-
-7. Add/update tests:
-
-```
-unit
-integration
-e2e
-```
-
-8. Run tests until all pass.
-
-9. Change status:
-
-```
-DONE
-```
-
-10. Write implementation report.
-
-11. Save report:
-
-```
-tasks/task-xxx-<topic>-report.md
-```
-
-Example:
-
-```
-tasks/task-512-agent-runner-report.md
-```
-
----
-
-# Feature Documentation Rules
-
-Strict path:
-
-```
-docs/features/<component-id>/<feature-id>/
-```
-
-Component ID = prefix before first `-`.
+Component ID rule:
+- component ID is the prefix before the first `-`
 
 Examples:
-
-```
-st-can-001 -> component st
-orc-run-014 -> component orc
-```
-
-Never place feature documentation directly under `docs/`.
-
----
-
-# Release Workflow
-
-Features are grouped into **releases**.
-
-Release documentation:
-
-```
-docs/releases/
+```text
+runner-api-002 -> component runner
+plugins-tele-002 -> component plugins
 ```
 
-Example:
+For small local fixes:
+- update matrices and report
+- skip feature doc unless it adds long-term architectural value
 
-```
-docs/releases/v1-0.md
-```
+## Tests
 
-Release document must contain:
+Every implemented feature must map to tests in:
+- unit
+- integration
+- e2e
 
-- release scope
-- included features
-- migration notes
-- deployment notes
+Not every feature needs all three at the same weight, but risky runtime features must have strong e2e coverage.
 
-Release matrix files (mandatory, same release folder):
+Mandatory e2e emphasis for:
+- Telegram / external messenger flows
+- workspace startup / restore
+- plugin lifecycle behavior
+- runner bootstrap behavior
+- manifest/session restore behavior
+- report ingestion / memory continuity
 
-```
-docs/<release>/features-matrix.md
-docs/<release>/test-matrix.md
-```
+## Reports
 
-Version handling rule (mandatory):
+Write one report per task cycle unless the user asks for finer granularity.
 
-- If user does not explicitly provide release version, agent must auto-bump release.
-- Auto-bump strategy: detect latest `v<major>-<minor>` folder in `docs/`, increment `<minor>` by `+1`.
-- Example: if latest is `v1-0`, next inferred release is `v1-1`.
-- Agent must create missing matrix files for inferred release automatically.
-
----
-
-# Release Process
-
-When release features are DONE:
-
-1. Merge to `dev`
-
-2. Promote
-
-```
-dev -> test
+Report path:
+```text
+tasks-log/task-xxx-<topic>-report.md
 ```
 
-3. Deploy staging and verify.
-
-4. Promote
-
-```
-test -> prod
-```
-
-5. Create git tag
-
-```
-git tag v1.0
-git push origin v1.0
-```
-
-Release tag must correspond to release documentation.
-
----
-
-# Tasks
-
-After finishing task add report:
-
-```
-tasks/task-xxx-<topic>-report.md
-```
-
-Example:
-
-```
-task-512-ops-auth-guard-report.md
-```
-
-Reports must contain:
-
+Reports must include:
 - implemented behavior
-- tests added
-- problems encountered
-- resolutions
+- tests added or updated
+- important decisions
+- open loops or known limits
 
-No placeholder content allowed.
+No placeholder reports.
 
----
-
-# Architecture Rules
-
-Constraints:
-
-```
-Max 70 lines per code file
-Max 7 files per folder
-```
-
-Documentation files are exempt.
-
-Programming rules:
-
-```
-no classes
-prefer pure functions
-side effects isolated
-no global mutable state
-```
-
-Architecture rules:
-
-```
-transport layer contains no business logic
-secrets stored in .env
-application options stored in DB
-```
-
----
-
-# Skills Alignment
-
-Skills location:
-
-```
-.agents/skills/
-```
-
-Examples:
-
-```
-.agents/skills/backend.md
-.agents/skills/orchestrator.md
-.agents/skills/testing.md
-```
-
-Rules:
-
-- if component skill exists → implementation must follow it
-- if no skill exists → create one first
-
-Task reports must reference the used skill.
-
----
-
-# Agent Definitions
-
-Agent definitions live in:
-
-```
-.agents/agents/
-```
-
-Examples:
-
-```
-planner.md
-coder.md
-tester.md
-reviewer.md
-```
-
-Each agent defines:
-
-- role
-- responsibilities
-- skills
-- execution constraints
-
-Example:
-
-```
-Agent: coder
-
-Role:
-implement code changes
+## Skills, Agents, MCP
 
 Skills:
-backend
-refactoring
-testing
+- live in `.agents/skills/`
+- if a relevant skill exists, follow it
+- if a new durable workflow appears repeatedly, consider creating a skill
+
+Agents:
+- live in `.agents/agents/`
+
+MCP configs:
+- live in `.agents/mcp/`
+
+## OptiDev Assumptions
+
+Assume the repository is used inside OptiDev:
+```text
+optid start <project>
 ```
 
----
-
-# MCP Integration
-
-MCP configuration:
-
-```
-.agents/mcp/
-```
-
-Examples:
-
-```
-filesystem-tools.yaml
-repo-index.yaml
-test-runner.yaml
-```
-
-MCP tools provide:
-
-- repo navigation
-- test execution
-- filesystem access
-- build orchestration
-
-Agents should prefer MCP tools over direct shell commands when possible.
-
----
-
-# OptiDev Integration
-
-Repository designed to run inside **OptiDev workspace**.
-
-Startup command:
-
-```
-optid <project>
-```
-
-OptiDev restores:
-
-- agent workspace
-- conversation history
-- development environment
-- test runners
-- logs
-
-Default workspace layout:
-
-```
-planner
-coder
+Default workspace mental model:
+```text
+chat
+editor/code
 tests
 logs
 ```
 
-Agents should assume repository is executed inside an OptiDev workspace.
+Agents should behave as if they work in a coordinated runtime, not in a single isolated shell.
 
----
+## Parallel Work
 
-# Parallel Agent Mode
-
-Parallel execution allowed only when explicitly requested.
+Parallel execution is allowed only when explicitly requested.
 
 Rules:
+- each worker owns a clear scope
+- no overlapping write ownership unless coordinated
+- one writer for shared control files
 
-- agents must own component scope
-- no shared file ownership
-- coordinator agent updates shared control files
-
-Shared files (single writer):
-
-```
-docs/<release>/features-matrix.md
-docs/<release>/test-matrix.md
-plan-v3.md
-tasks/*
+Single-writer control files:
+```text
+docs/v1-2/features-matrix.md
+docs/v1-2/test-matrix.md
+tasks-log/*
 ```
 
-Worker agents modify only files within their component scope.
+## Git / Release Notes
 
----
-
-# Git Flow
-
-Mandatory branches:
-
-```
+Expected long-lived branches:
+```text
 dev
 test
 prod
 ```
 
-Promotion order:
-
-```
-dev -> test -> prod
-```
-
-Production releases must correspond to **git tags**.
-
----
-
-# Test Rules
-
-Tests must not be blocked by missing data.
-
-If required create:
-
-```
-fixtures
-seeds
-mocks
+Release docs live in:
+```text
+docs/releases/
 ```
 
-inside the test scope.
-
-Never keep feature IN_PROGRESS due to missing inputs.
-
----
-
-# Architecture Source of Truth
-
-Architecture documentation:
-
-```
-docs/*arc*.md
-```
-
-Deprecated architecture files:
-
-```
-docs/*arc*.deprecated.md
-```
-
-AGENTS.md must not duplicate architecture rules.
-Update architecture docs instead.
-
----
-
-# Principle
-
-This repository follows **agent‑native development**.
-
-Primary flow:
-
-```
-features -> tests -> releases
-```
-
-Traceability must exist between:
-
-```
-task
-feature
-test
-release
-git tag
-```
+Release tags and promotions happen only when the user explicitly moves the release process forward.

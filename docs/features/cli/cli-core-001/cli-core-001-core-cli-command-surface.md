@@ -11,17 +11,17 @@ Implement the first working CLI contract for `optid` with commands:
 The command surface must be deterministic and callable from terminal entrypoint.
 
 ## current implementation state
-- Implemented in `optidev` package with module entrypoint (`python -m optidev`).
+- Implemented as a native Bun CLI entrypoint in `ui/apps/server/src/optidevCli.ts`, exposed through the root shim `scripts/optid`.
 - Command surface implemented:
   - start: `optid <project>`
   - service commands: `stop`, `status`, `logs`, `projects`
 - Workspace state persisted in `~/.optidev` (or `OPTIDEV_HOME` override).
-- Zellij backend wired behind mux abstraction (`optidev/mux/base.py`, `optidev/mux/zellij.py`).
-- Test suite added and passing via `python3 -m unittest discover -s tests -p 'test_*.py' -v`.
+- Runtime/session behavior is shared with the native TS/Bun `/optidev` route instead of a separate Python CLI core.
+- Test suite is colocated in the forked server layer via `optidevCli.test.ts` and `optidevCliShim.test.ts`.
 
 ## implementation plan
-1. Completed: package entrypoint and CLI dispatcher.
+1. Completed: Bun-native entrypoint and CLI dispatcher.
 2. Completed: workspace/session service integration with state persistence.
-3. Completed: mux abstraction with zellij backend for MVP.
-4. Completed: unit/integration/e2e smoke coverage.
+3. Completed: CLI runs on the same native TS/Bun runtime modules used by `/optidev`.
+4. Completed: colocated unit/integration smoke coverage.
 5. Completed: feature moved to `DONE` with report.

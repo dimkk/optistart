@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "upstream": {
+    "url": "https://github.com/pingdotgg/t3code",
+    "baseRef": "c97c6b7836ce888b24a157de8eb4aea761028979",
+    "baseCommit": "c97c6b7836ce888b24a157de8eb4aea761028979",
+    "baseCommitDate": "2026-03-07T13:12:11-08:00",
+    "baseCommitSubject": "Enforce minimum Codex CLI version (≥0.37.0) before starting sessions (#404)"
+  },
+  "vendor": {
+    "path": "ui",
+    "metadataUpdatedAt": "2026-03-11T15:15:12.652Z",
+    "metadataUpdatedFrom": "bootstrap",
+    "bootstrapReason": "Initial vendored ui base inferred from vendor import commit c0e5860 by exact blob matches across 456 of 461 shared upstream paths."
+  }
+}
