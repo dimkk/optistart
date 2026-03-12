@@ -30,6 +30,8 @@
 | repo-release-002 | Full repository validation on pull requests targeting `main` | DONE |
 | cli-update-001 | Installed CLI update check against the latest tagged release | DONE |
 | cli-launch-001 | Installed `optid` launcher for the shipped vendored `t3code` + OptiDev product | DONE |
+| cli-runner-002 | Runner session inventory through `optid runner ls` | DONE |
+| cli-runner-003 | Alias-based runner session resume through `optid runner resume <id>` | DONE |
 | ui-shell-002 | OptiDev first-class `t3code` shell integration and stable route UX | DONE |
 | repo-files-002 | Repository file explorer and typed file viewer inside OptiDev | DONE |
 | runtime-session-002 | Session and restore management surface inside the integrated OptiDev UI | DONE |

@@ -90,6 +90,11 @@ They define:
 
 If matrices and a feature doc disagree, matrices win.
 
+Reality-check rule:
+- do not silently narrow explicit user requirements such as "all", "open", "running", "latest", or "live" into a persisted subset without saying so
+- when implementation depends on a runtime source of truth, verify against the real runtime path and not only seeded/unit fixtures before considering the task done
+- if a requirement can reasonably map to more than one source of truth, ask the user or explicitly call out the assumption before shipping
+
 ## Atomic Feature Lifecycle
 
 Default rule:

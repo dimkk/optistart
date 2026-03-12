@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs";
+import http from "node:http";
 import { fileURLToPath } from "node:url";
 import os from "node:os";
 import path from "node:path";
@@ -138,5 +139,84 @@ describe("optidevCli shim", () => {
 
     expect(summary.stdout).toContain("Project memory:");
     expect(show.stdout).toContain("Feature: runtime-ts-002");
+  });
+
+  it("runs runner inventory and resume through the root scripts/optid shim", async () => {
+    const root = repoRoot();
+    const homeDir = makeTempDir("optidev-cli-shim-home-");
+    const cwd = makeTempDir("optidev-cli-shim-root-");
+    const scriptPath = path.join(root, "scripts", "optid");
+    const env = {
+      ...process.env,
+      OPTIDEV_HOME: homeDir,
+    };
+
+    const resumeServer = await new Promise<{ close: () => Promise<void>; baseUrl: string }>((resolve, reject) => {
+      const server = http.createServer((req, res) => {
+        let body = "";
+        req.on("data", (chunk) => {
+          body += chunk.toString("utf8");
+        });
+        req.on("end", () => {
+          const payload = body.trim().length > 0 ? JSON.parse(body) as { action?: string } : {};
+          res.writeHead(200, { "Content-Type": "application/json" });
+          if (payload.action === "runner_list") {
+            res.end(
+              JSON.stringify({
+                ok: true,
+                lines: [
+                  "1. runner=codex | guid=thread-alpha | cwd=/repo/demo | user=\"Fix landing hero spacing and keep the CTA visible on mobile.\" | runtime=running | session=running",
+                ],
+                data: [
+                  {
+                    alias: 1,
+                    runner: "codex",
+                    guid: "thread-alpha",
+                    cwd: "/repo/demo",
+                    latestUserPhrase: "Fix landing hero spacing and keep the CTA visible on mobile.",
+                    runtimeStatus: "running",
+                    sessionStatus: "running",
+                    lastSeenAt: "2026-03-12T09:10:00.000Z",
+                  },
+                ],
+              }),
+            );
+            return;
+          }
+          res.end(JSON.stringify({ ok: true, lines: ["Runner session resumed: codex thread-alpha.", "Cwd: /repo/demo."] }));
+        });
+      });
+      server.listen(0, "127.0.0.1", () => {
+        const address = server.address();
+        if (typeof address !== "object" || address === null) {
+          reject(new Error("Expected server address"));
+          return;
+        }
+        resolve({
+          baseUrl: `http://127.0.0.1:${address.port}`,
+          close: () =>
+            new Promise<void>((done, fail) => server.close((error: Error | undefined) => (error ? fail(error) : done()))),
+        });
+      });
+    });
+
+    try {
+      const list = await execFileAsync(scriptPath, ["runner", "ls"], {
+        cwd,
+        env: { ...env, OPTID_SERVER_URL: resumeServer.baseUrl },
+        encoding: "utf8",
+      });
+      const resume = await execFileAsync(scriptPath, ["runner", "resume", "1"], {
+        cwd,
+        env: { ...env, OPTID_SERVER_URL: resumeServer.baseUrl },
+        encoding: "utf8",
+      });
+
+      expect(list.stdout).toContain("1. runner=codex | guid=thread-alpha");
+      expect(resume.stdout).toContain("Resolved runner 1 -> thread-alpha.");
+      expect(resume.stdout).toContain("Runner session resumed: codex thread-alpha.");
+    } finally {
+      await resumeServer.close();
+    }
   });
 });

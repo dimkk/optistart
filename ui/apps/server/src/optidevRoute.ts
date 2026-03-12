@@ -97,6 +97,11 @@ async function runOptiDevAction(
   action: string,
   payload: OptiDevActionPayload,
   context: OptiDevRouteContext,
+  extraActionHandler?: (
+    action: string,
+    payload: OptiDevActionPayload,
+    context: OptiDevRouteContext,
+  ) => Promise<OptiDevActionResponse | null>,
 ): Promise<OptiDevActionResponse> {
   const normalizedPayload = normalizePayload(payload, context);
 
@@ -250,6 +255,13 @@ async function runOptiDevAction(
     }
   }
 
+  if (extraActionHandler) {
+    const extra = await extraActionHandler(action, payload, context);
+    if (extra) {
+      return extra;
+    }
+  }
+
   return {
     ok: false,
     lines: [`Unsupported OptiDev action: ${action}.`],
@@ -262,6 +274,11 @@ export async function tryHandleOptiDevRequest(
   reqBody: string,
   res: ServerResponse,
   context: OptiDevRouteContext,
+  extraActionHandler?: (
+    action: string,
+    payload: OptiDevActionPayload,
+    context: OptiDevRouteContext,
+  ) => Promise<OptiDevActionResponse | null>,
 ): Promise<boolean> {
   const method = (req.method ?? "GET").toUpperCase();
 
@@ -414,7 +431,7 @@ export async function tryHandleOptiDevRequest(
     return true;
   }
 
-  const result = await runOptiDevAction(action, payload, context);
+  const result = await runOptiDevAction(action, payload, context, extraActionHandler);
   json(res, result.ok ? 200 : 400, result);
   return true;
 }

@@ -54,6 +54,7 @@ import { ProjectionSnapshotQuery } from "./orchestration/Services/ProjectionSnap
 import { OrchestrationReactor } from "./orchestration/Services/OrchestrationReactor";
 import { ProviderService } from "./provider/Services/ProviderService";
 import { ProviderHealth } from "./provider/Services/ProviderHealth";
+import { ProviderSessionDirectory } from "./provider/Services/ProviderSessionDirectory";
 import { CheckpointDiffQuery } from "./checkpointing/Services/CheckpointDiffQuery";
 import { clamp } from "effect/Number";
 import { Open, resolveAvailableEditors } from "./open";
@@ -74,6 +75,7 @@ import { parseBase64DataUrl } from "./imageMime.ts";
 import { AnalyticsService } from "./telemetry/Services/AnalyticsService.ts";
 import { expandHomePath } from "./os-jank.ts";
 import { tryHandleOptiDevRequest } from "./optidevRoute";
+import { runServerRunnerAction } from "./optidevRunner";
 
 /**
  * ServerShape - Service API for server lifecycle control.
@@ -209,6 +211,7 @@ export type ServerCoreRuntimeServices =
   | CheckpointDiffQuery
   | OrchestrationReactor
   | ProviderService
+  | ProviderSessionDirectory
   | ProviderHealth;
 
 export type ServerRuntimeServices =
@@ -255,6 +258,9 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   const terminalManager = yield* TerminalManager;
   const keybindingsManager = yield* Keybindings;
   const providerHealth = yield* ProviderHealth;
+  const providerService = yield* ProviderService;
+  const providerSessionDirectory = yield* ProviderSessionDirectory;
+  const projectionSnapshotQuery = yield* ProjectionSnapshotQuery;
   const git = yield* GitCore;
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
@@ -446,7 +452,20 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
               tryHandleOptiDevRequest(req, url, requestBody, res, {
                 cwd,
                 homeDir: process.env.OPTIDEV_HOME,
-              }),
+              }, async (action, payload) =>
+                runServerRunnerAction({
+                  action,
+                  payload:
+                    typeof payload.threadId === "string"
+                      ? { threadId: payload.threadId }
+                      : (typeof payload.identifier === "string"
+                          ? { threadId: payload.identifier }
+                          : {}),
+                  providerService,
+                  providerSessionDirectory,
+                  projectionSnapshotQuery,
+                }),
+              ),
             )
           ) {
             return;

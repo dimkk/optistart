@@ -22,11 +22,12 @@ import {
   nativeResumeAction,
   nativeStartAction,
 } from "./optidevStartup";
+import { nativeRunnerListAction, nativeRunnerResumeAction } from "./optidevRunner";
 
 const USAGE =
   "Usage: optid start [project|.] [--advice] | " +
   "optid [init <name|.>|go <name|.> [--advice]|resume [project|.]|reset [project|.]|" +
-  "workspace clone <name>|memory [show <kind> <id>|open-loops]|stop|status|logs|projects|" +
+  "workspace clone <name>|memory [show <kind> <id>|open-loops]|runner <ls|resume <id>>|stop|status|logs|projects|" +
   "telegram|skills|agents|advice]";
 
 interface CliStreams {
@@ -227,6 +228,21 @@ export async function runOptiDevCli(
     }
     if (rest.length === 3 && rest[0] === "show") {
       const result = await nativeMemoryShow(path.resolve(effectiveRuntime.cwd), rest[1]!, rest[2]!);
+      printLines(result.lines, result.ok ? effectiveRuntime.streams.stdout : effectiveRuntime.streams.stderr);
+      return result.ok ? 0 : 1;
+    }
+    printText(USAGE, effectiveRuntime.streams.stderr);
+    return 2;
+  }
+
+  if (command === "runner") {
+    if (rest.length === 1 && rest[0] === "ls") {
+      const result = await nativeRunnerListAction(context, effectiveRuntime.env);
+      printLines(result.lines, result.ok ? effectiveRuntime.streams.stdout : effectiveRuntime.streams.stderr);
+      return result.ok ? 0 : 1;
+    }
+    if (rest.length === 2 && rest[0] === "resume") {
+      const result = await nativeRunnerResumeAction(context, rest[1]!, effectiveRuntime.env);
       printLines(result.lines, result.ok ? effectiveRuntime.streams.stdout : effectiveRuntime.streams.stderr);
       return result.ok ? 0 : 1;
     }

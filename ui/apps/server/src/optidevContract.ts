@@ -54,6 +54,17 @@ export interface OptiDevTelegramConfigPayload {
   chatId: string;
 }
 
+export interface OptiDevRunnerInventoryEntry {
+  alias: number;
+  runner: string;
+  guid: string;
+  cwd: string | null;
+  latestUserPhrase: string | null;
+  runtimeStatus: string;
+  sessionStatus: string | null;
+  lastSeenAt: string;
+}
+
 export interface OptiDevStatePayload {
   repoRoot: string;
   status: string;
@@ -78,6 +89,7 @@ export interface OptiDevActionPayload {
   content?: string;
   botToken?: string;
   chatId?: string;
+  threadId?: string;
 }
 
 export interface OptiDevActionResponse {

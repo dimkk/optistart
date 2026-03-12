@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
+import { vi } from "vitest";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { runOptiDevCli } from "./optidevCli";
@@ -35,7 +36,11 @@ function makeRuntime(homeDir: string, cwd: string) {
 }
 
 describe("optidevCli", () => {
+  const originalFetch = globalThis.fetch;
+
   afterEach(() => {
+    vi.restoreAllMocks();
+    globalThis.fetch = originalFetch;
     for (const dir of tempDirs.splice(0, tempDirs.length)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -152,5 +157,64 @@ describe("optidevCli", () => {
     expect(readStderr()).toBe("");
     expect(readStdout()).toContain("Project memory:");
     expect(readStdout()).toContain("Feature: runtime-ts-002");
+  });
+
+  it("lists and resumes runner sessions through the native CLI runtime", async () => {
+    const homeDir = makeTempDir("optidev-cli-home-");
+    const cwd = makeTempDir("optidev-cli-cwd-");
+    const { runtime, readStdout, readStderr } = makeRuntime(homeDir, cwd);
+    runtime.env.OPTID_SERVER_URL = "http://127.0.0.1:4020";
+
+    const fetchMock = vi.fn(async (_url, init) => {
+      const body = JSON.parse(String(init?.body ?? "{}")) as { action?: string };
+      if (body.action === "runner_list") {
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            lines: [
+              "1. runner=codex | guid=thread-alpha | cwd=/repo/demo | user=\"Fix landing hero spacing and keep the CTA visible on mobile.\" | runtime=running | session=running",
+            ],
+            data: [
+              {
+                alias: 1,
+                runner: "codex",
+                guid: "thread-alpha",
+                cwd: "/repo/demo",
+                latestUserPhrase: "Fix landing hero spacing and keep the CTA visible on mobile.",
+                runtimeStatus: "running",
+                sessionStatus: "running",
+                lastSeenAt: "2026-03-12T09:10:00.000Z",
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        );
+      }
+
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          lines: ["Runner session resumed: codex thread-alpha.", "Cwd: /repo/demo."],
+        }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    });
+    globalThis.fetch = fetchMock as typeof fetch;
+
+    const listed = await runOptiDevCli(["runner", "ls"], runtime);
+    const resumed = await runOptiDevCli(["runner", "resume", "1"], runtime);
+
+    expect(listed).toBe(0);
+    expect(resumed).toBe(0);
+    expect(readStderr()).toBe("");
+    expect(readStdout()).toContain("1. runner=codex | guid=thread-alpha");
+    expect(readStdout()).toContain("Resolved runner 1 -> thread-alpha.");
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 });

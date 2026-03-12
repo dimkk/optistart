@@ -2,6 +2,16 @@
 
 A local CLI workspace orchestrator for AI coding sessions.
 
+Install:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/dimkk/optistart/main/scripts/install.sh | bash
+```
+
+```powershell
+powershell -ExecutionPolicy Bypass -Command "Invoke-WebRequest https://raw.githubusercontent.com/dimkk/optistart/main/scripts/install.ps1 -UseBasicParsing | Invoke-Expression"
+```
+
 Main flows:
 
 - `optid` starts the shipped `t3code` + OptiDev UI bundle
@@ -18,6 +28,8 @@ Available commands:
 - `optid ui` (same as `optid`)
 - `optid --version`
 - `optid t3code [status|bootstrap|refresh]`
+- `optid runner ls`
+- `optid runner resume <id>`
 - `optid start <project> [--advice]`
 - `optid start [--advice]` (from current project directory)
 - `optid init <name|.>`
@@ -108,6 +120,42 @@ curl -fsSL https://raw.githubusercontent.com/dimkk/optistart/main/scripts/instal
 ```powershell
 powershell -ExecutionPolicy Bypass -Command "iwr https://raw.githubusercontent.com/dimkk/optistart/main/scripts/install.ps1 -UseBasicParsing | iex"
 ```
+
+### Nightly install from `test`
+
+Use this path when you want the current pre-release branch state instead of the stable/tagged install flow from `main`.
+
+Unix/macOS:
+
+```bash
+git clone --branch test https://github.com/dimkk/optistart.git
+cd optistart
+./scripts/install.sh
+```
+
+Windows PowerShell:
+
+```powershell
+git clone --branch test https://github.com/dimkk/optistart.git
+cd optistart
+powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
+```
+
+Update an existing nightly checkout:
+
+```bash
+git checkout test
+git pull origin test
+./scripts/install.sh
+```
+
+```powershell
+git checkout test
+git pull origin test
+powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1
+```
+
+Use the local-repo installer for nightly builds because the remote `curl` / `Invoke-WebRequest` installer path resolves the stable release manifest and tagged release archives by default.
 
 Optional override (for fork/private mirror):
 
