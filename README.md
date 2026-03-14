@@ -18,8 +18,8 @@ Main flows:
 - `optid start <project>` bootstraps or restores an OptiDev workspace for a repository
 - `optid t3code refresh --dry-run --allow-dirty` shows how the vendored upstream refresh would replay onto the current `./ui/`
 - pull requests targeting `main` run the repository-owned validation suite before merge
-- pushes to `test` run validation, bump the nightly version, package desktop binaries, and publish a prerelease
-- pushes to `main` run validation, bump the stable version, package desktop binaries, and publish a stable release
+- pushes to `test` run validation, bump the nightly version, package a compact JS runtime bundle, and publish a prerelease
+- pushes to `main` run validation, bump the stable version, package a compact JS runtime bundle, and publish a stable release
 
 ## Current Status
 MVP is implemented and tested.
@@ -70,10 +70,11 @@ Implemented subsystems:
 Before installation:
 
 - `bash`
-- `bun` `1.3+` (required)
-- `node` `24+` (required for bundled UI build/start flows)
+- `node` `24+` (required)
+- `npm` (required for stable/tagged release install)
 - `curl` (required for `curl | bash` install flow)
 - `tar` (required for Unix release install extraction)
+- `bun` `1.3+` (required only for local-repo installs and branch snapshot/nightly source builds)
 - `zellij` (optional runtime backend)
 - `fresh` editor CLI (recommended for the editor tab)
 - `Codex` CLI (primary recommended agent runner)
@@ -185,8 +186,8 @@ Installer behavior:
 
 1. If local repo layout is detected, it uses local files only.
 2. If local repo is not detected, it resolves release metadata from `scripts/release-manifest.json` on `main` by default, or from the branch selected through `OPTID_GIT_REF` for nightly/test installs.
-3. It downloads the tagged source snapshot for that version into a versioned install layout under `~/.optidev/optistart/releases/`.
-4. It installs Bun workspace dependencies and builds the bundled `t3code` + OptiDev UI.
+3. Stable/tagged installs download a compact prebuilt runtime tarball for that version into `~/.optidev/optistart/releases/` and install production server dependencies with `npm`.
+4. Branch snapshot installs still download the branch source tree and build the runtime locally with Bun.
 5. It exposes a stable `optid` launcher and adds PATH export automatically.
 
 ## T3 Fork UI
@@ -284,7 +285,8 @@ Installed release launch behavior:
 - `optid` starts the bundled `t3code` + OptiDev UI
 - `optid ui` is an explicit alias for the same bundled UI launch
 - `optid t3code ...` exposes vendored upstream maintenance without calling internal script paths directly
-- `optid status`, `optid start`, and the rest of the native commands still delegate to the Bun CLI runtime
+- installed releases run native commands through the bundled Node CLI runtime
+- local repo and branch snapshot installs still delegate native commands through the Bun source CLI runtime
 - installed releases check the latest remote tag and print an upgrade suggestion when a newer release exists
 
 ## Workspace Manifest

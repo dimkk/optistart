@@ -80,35 +80,52 @@ async function maybePrintUpdateSuggestion(rootDir, env) {
   }
 }
 
-async function ensureBuiltUi(rootDir) {
+function resolveInstalledRuntime(rootDir) {
+  return {
+    serverDist: path.join(rootDir, "ui/apps/server/dist/index.mjs"),
+    clientDist: path.join(rootDir, "ui/apps/server/dist/client/index.html"),
+    cliDist: path.join(rootDir, "ui/apps/server/dist/optidevCli.mjs"),
+    sourceCli: path.join(rootDir, "ui/apps/server/src/optidevCli.ts"),
+  };
+}
+
+async function ensureLocalRepoUi(rootDir) {
   const serverDist = path.join(rootDir, "ui/apps/server/dist/index.mjs");
-  const webDist = path.join(rootDir, "ui/apps/web/dist/index.html");
-  if ((await pathExists(serverDist)) && (await pathExists(webDist))) {
+  const clientDist = path.join(rootDir, "ui/apps/server/dist/client/index.html");
+  if ((await pathExists(serverDist)) && (await pathExists(clientDist))) {
     return;
   }
 
+  if (!ensureCommand("bun")) {
+    throw new Error("optid error: missing required command: bun");
+  }
   if (!ensureCommand("node")) {
     throw new Error("optid error: missing required command: node");
   }
 
-  const exitCode = await runCommand("bun", ["run", "build"], {
+  const exitCode = await runCommand("bun", ["run", "build:runtime"], {
     cwd: path.join(rootDir, "ui"),
     env: process.env,
   });
   if (exitCode !== 0) {
-    throw new Error(`optid error: failed to build bundled UI (exit ${exitCode})`);
+    throw new Error(`optid error: failed to build runtime assets (exit ${exitCode})`);
   }
 }
 
 async function main() {
   const invocationCwd = process.cwd();
   const { rootDir, args } = parseRunnerArgs(process.argv.slice(2));
-  if (!ensureCommand("bun")) {
-    throw new Error("optid error: missing required command: bun");
+  if (!ensureCommand("node")) {
+    throw new Error("optid error: missing required command: node");
   }
 
   const manifest = await readReleaseManifest(rootDir);
   const invocation = resolveOptidInvocation(args);
+  const installedReleaseRoot = isInstalledReleaseRoot(
+    rootDir,
+    await pathExists(path.join(rootDir, ".git")),
+  );
+  const runtime = resolveInstalledRuntime(rootDir);
   await maybePrintUpdateSuggestion(rootDir, process.env);
 
   if (invocation.kind === "version") {
@@ -117,11 +134,14 @@ async function main() {
   }
 
   if (invocation.kind === "ui") {
-    await ensureBuiltUi(rootDir);
-    if (!ensureCommand("node")) {
-      throw new Error("optid error: missing required command: node");
+    if (installedReleaseRoot) {
+      if (!(await pathExists(runtime.serverDist)) || !(await pathExists(runtime.clientDist))) {
+        throw new Error("optid error: installed release is missing bundled runtime assets");
+      }
+    } else {
+      await ensureLocalRepoUi(rootDir);
     }
-    return runCommand("node", [path.join(rootDir, "ui/apps/server/dist/index.mjs"), ...invocation.forwardedArgs], {
+    return runCommand("node", [runtime.serverDist, ...invocation.forwardedArgs], {
       cwd: path.join(rootDir, "ui/apps/server"),
       env: process.env,
     });
@@ -137,7 +157,20 @@ async function main() {
     });
   }
 
-  return runCommand("bun", [path.join(rootDir, "ui/apps/server/src/optidevCli.ts"), ...invocation.forwardedArgs], {
+  if (installedReleaseRoot) {
+    if (!(await pathExists(runtime.cliDist))) {
+      throw new Error("optid error: installed release is missing bundled CLI assets");
+    }
+    return runCommand("node", [runtime.cliDist, ...invocation.forwardedArgs], {
+      cwd: invocationCwd,
+      env: process.env,
+    });
+  }
+
+  if (!ensureCommand("bun")) {
+    throw new Error("optid error: missing required command: bun");
+  }
+  return runCommand("bun", [runtime.sourceCli, ...invocation.forwardedArgs], {
     cwd: invocationCwd,
     env: process.env,
   });
