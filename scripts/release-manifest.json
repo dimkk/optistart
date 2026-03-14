@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "productName": "optid",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "repository": {
     "url": "https://github.com/dimkk/optistart",
     "gitUrl": "https://github.com/dimkk/optistart.git"
