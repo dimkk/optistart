@@ -34,8 +34,92 @@ import { GitHubCliLive } from "./git/Layers/GitHubCli";
 import { CodexTextGenerationLive } from "./git/Layers/CodexTextGeneration";
 import { GitServiceLive } from "./git/Layers/GitService";
 import { BunPtyAdapterLive } from "./terminal/Layers/BunPTY";
-import { NodePtyAdapterLive } from "./terminal/Layers/NodePTY";
+import { makeUnavailablePtyAdapterLive } from "./terminal/Layers/UnavailablePTY";
+import { PtyAdapter } from "./terminal/Services/PTY";
 import { AnalyticsService } from "./telemetry/Services/AnalyticsService";
+
+type LoadNodePtyAdapter = () => Promise<{
+  readonly NodePtyAdapterLive: Layer.Layer<PtyAdapter>;
+}>;
+
+function collectErrorMessages(cause: unknown): string[] {
+  const queue: unknown[] = [cause];
+  const seen = new Set<unknown>();
+  const messages: string[] = [];
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (current === undefined || current === null || seen.has(current)) {
+      continue;
+    }
+    seen.add(current);
+
+    if (typeof current === "string") {
+      messages.push(current);
+      continue;
+    }
+
+    if (current instanceof Error) {
+      messages.push(current.message);
+      const nestedCause = (current as { cause?: unknown }).cause;
+      if (nestedCause !== undefined) {
+        queue.push(nestedCause);
+      }
+      continue;
+    }
+
+    if (typeof current === "object") {
+      const value = current as { message?: unknown; cause?: unknown };
+      if (typeof value.message === "string") {
+        messages.push(value.message);
+      }
+      if (value.cause !== undefined) {
+        queue.push(value.cause);
+      }
+    }
+  }
+
+  return messages;
+}
+
+function isRecoverableNodePtyLoadError(cause: unknown): boolean {
+  const message = collectErrorMessages(cause).join(" ").toLowerCase();
+  return (
+    message.includes("node-pty") ||
+    message.includes("pty.node") ||
+    message.includes("failed to load native module") ||
+    message.includes("cannot find module")
+  );
+}
+
+export function makeTerminalPtyAdapterLayer(
+  loadNodePtyAdapter: LoadNodePtyAdapter = () => import("./terminal/Layers/NodePTY"),
+) {
+  return Effect.gen(function* () {
+    if (typeof Bun !== "undefined" && process.platform !== "win32") {
+      return BunPtyAdapterLive;
+    }
+
+    return yield* Effect.tryPromise({
+      try: loadNodePtyAdapter,
+      catch: (cause) => cause,
+    }).pipe(
+      Effect.map((module) => module.NodePtyAdapterLive),
+      Effect.catch((cause) => {
+        if (!isRecoverableNodePtyLoadError(cause)) {
+          return Effect.die(cause);
+        }
+
+        const detail = collectErrorMessages(cause)[0] ?? "node-pty failed to load.";
+        return Effect.succeed(
+          makeUnavailablePtyAdapterLive(
+            `Terminal PTY support is unavailable in this runtime because node-pty failed to load. ${detail}`,
+          ),
+        );
+      }),
+    );
+  }).pipe(Layer.unwrap);
+}
 
 export function makeServerProviderLayer(): Layer.Layer<
   ProviderService | ProviderSessionDirectory,
@@ -107,13 +191,7 @@ export function makeServerRuntimeServicesLayer() {
     Layer.provideMerge(checkpointReactorLayer),
   );
 
-  const terminalLayer = TerminalManagerLive.pipe(
-    Layer.provide(
-      typeof Bun !== "undefined" && process.platform !== "win32"
-        ? BunPtyAdapterLive
-        : NodePtyAdapterLive,
-    ),
-  );
+  const terminalLayer = TerminalManagerLive.pipe(Layer.provide(makeTerminalPtyAdapterLayer()));
 
   const gitManagerLayer = GitManagerLive.pipe(
     Layer.provideMerge(gitCoreLayer),

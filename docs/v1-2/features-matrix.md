@@ -27,7 +27,7 @@
 | repo-upstream-002 | Deterministic conflict resolution for vendored `t3code` refresh hotspots | DONE |
 | repo-upstream-003 | Explicit operator command for vendored `t3code` upstream refresh | DONE |
 | repo-release-001 | Merge-to-main release bump and repository-owned tag/build automation | DONE |
-| repo-release-002 | Full repository validation on pull requests targeting `main` | DONE |
+| repo-release-002 | Full repository validation on pull requests targeting `main`, including CI-safe fallback when PTY native bindings are unavailable | DONE |
 | cli-update-001 | Installed CLI update check against the latest tagged release | DONE |
 | cli-launch-001 | Installed `optid` launcher for the shipped vendored `t3code` + OptiDev product | DONE |
 | cli-runner-002 | Runner session inventory through `optid runner ls` | DONE |
