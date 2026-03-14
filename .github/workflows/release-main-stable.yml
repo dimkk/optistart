@@ -20,6 +20,7 @@ jobs:
     outputs:
       version: ${{ steps.release_meta.outputs.version }}
       tag: ${{ steps.release_meta.outputs.tag }}
+      release_sha: ${{ steps.create_tag.outputs.release_sha }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -59,10 +60,14 @@ jobs:
           git commit -m "chore(release): prepare ${{ steps.release_meta.outputs.tag }} [skip stable release]"
 
       - name: Create stable tag
-        run: git tag "${{ steps.release_meta.outputs.tag }}"
+        id: create_tag
+        shell: bash
+        run: |
+          git tag -a "${{ steps.release_meta.outputs.tag }}" -m "Release ${{ steps.release_meta.outputs.tag }}"
+          echo "release_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Push stable commit and tag
-        run: git push origin HEAD:main --follow-tags
+        run: git push origin HEAD:main "refs/tags/${{ steps.release_meta.outputs.tag }}"
 
   build:
     name: Build ${{ matrix.label }}
@@ -96,7 +101,7 @@ jobs:
       - name: Checkout tagged ref
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.prepare.outputs.tag }}
+          ref: ${{ needs.prepare.outputs.release_sha }}
           fetch-depth: 0
 
       - name: Setup Bun
@@ -207,7 +212,7 @@ jobs:
       - name: Checkout tagged ref
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.prepare.outputs.tag }}
+          ref: ${{ needs.prepare.outputs.release_sha }}
           fetch-depth: 0
 
       - name: Download desktop artifacts
@@ -222,8 +227,8 @@ jobs:
         run: |
           mkdir -p release-assets
           prefix="optid-${{ needs.prepare.outputs.version }}"
-          git archive --format=tar.gz --prefix="$prefix/" -o "release-assets/${prefix}.tar.gz" "${{ needs.prepare.outputs.tag }}"
-          git archive --format=zip --prefix="$prefix/" -o "release-assets/${prefix}.zip" "${{ needs.prepare.outputs.tag }}"
+          git archive --format=tar.gz --prefix="$prefix/" -o "release-assets/${prefix}.tar.gz" "${{ needs.prepare.outputs.release_sha }}"
+          git archive --format=zip --prefix="$prefix/" -o "release-assets/${prefix}.zip" "${{ needs.prepare.outputs.release_sha }}"
           cp scripts/install.sh release-assets/install.sh
           cp scripts/install.ps1 release-assets/install.ps1
           cp scripts/release-manifest.json release-assets/release-manifest.json
@@ -232,7 +237,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.prepare.outputs.tag }}
-          target_commitish: ${{ needs.prepare.outputs.tag }}
+          target_commitish: ${{ needs.prepare.outputs.release_sha }}
           name: OptiDev v${{ needs.prepare.outputs.version }}
           generate_release_notes: true
           prerelease: false

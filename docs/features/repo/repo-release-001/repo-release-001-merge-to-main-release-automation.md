@@ -11,7 +11,8 @@ Drive product versioning from the outer repository so pushes to `test` produce n
   - runs repository validation
   - bumps the product version in `nightly` mode
   - commits the synchronized manifests back to `test`
-  - creates and pushes the matching prerelease tag
+  - creates an annotated prerelease tag and pushes it as an explicit remote tag ref
+  - passes the prepared release commit SHA into downstream jobs so builds do not depend on remote tag lookup timing
   - builds desktop binaries across the GitHub Actions platform matrix
   - publishes a prerelease GitHub release with source bundles, installers, manifest, and packaged desktop artifacts
 - `.github/workflows/release-main-stable.yml` runs on pushes to `main` and:
@@ -19,7 +20,8 @@ Drive product versioning from the outer repository so pushes to `test` produce n
   - runs repository validation
   - bumps the product version in `stable` mode
   - commits the synchronized manifests back to `main`
-  - creates and pushes the matching stable tag
+  - creates an annotated stable tag and pushes it as an explicit remote tag ref
+  - passes the prepared release commit SHA into downstream jobs so builds do not depend on remote tag lookup timing
   - builds desktop binaries across the GitHub Actions platform matrix
   - publishes a stable GitHub release with source bundles, installers, manifest, and packaged desktop artifacts
 

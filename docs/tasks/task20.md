@@ -3,6 +3,7 @@
 ## goal
 - Fix the stable release blocker where GitHub Actions server validation fails before test execution because `node-pty` native bindings are unavailable in CI.
 - Keep the shared `main` validation path green without requiring the entire server runtime to crash on startup when PTY native support is missing.
+- Fix the stable/nightly release blocker where build jobs cannot check out the just-created release ref because the workflow pushes a lightweight tag via `--follow-tags`.
 
 ## architecture
 - Move server PTY adapter selection behind a runtime-resolved layer instead of static eager imports.
@@ -10,11 +11,15 @@
 - Prefer Bun PTY when the runtime exposes Bun terminal support.
 - On non-Bun runtimes, try loading the Node PTY adapter dynamically.
 - If `node-pty` cannot load, provide an explicit unavailable PTY adapter that fails only on `terminal.open` instead of crashing unrelated server startup and tests.
+- In both release workflows, create annotated tags and push them explicitly instead of relying on `git push --follow-tags`.
+- Pass the release commit SHA from `prepare` into downstream build/release jobs so artifact builds are anchored to the prepared release commit, not to remote tag propagation timing.
 
 ## atomic features
 - Add a CI-safe PTY adapter selection path in `serverLayers`.
 - Add an unavailable PTY adapter layer with a clear terminal spawn error.
 - Add regression coverage proving the fallback path builds and fails lazily at spawn time.
+- Harden stable and nightly release workflows so the release tag is published as a real remote ref.
+- Switch downstream workflow checkout/archive targeting from tag lookup to the prepared release commit SHA.
 
 ## test plan
 - Add/extend unit coverage for PTY adapter selection fallback.
@@ -25,6 +30,7 @@
   - `ui/apps/server/src/main.test.ts`
   - `ui/apps/server/src/wsServer.test.ts`
 - Re-run `bash scripts/run-main-pr-checks.sh`.
+- Reproduce the Git tag publication behavior locally with a temporary repo to prove that lightweight tags are skipped by `--follow-tags` while annotated tags plus explicit `refs/tags/...` push publish the release ref.
 
 ## approvals / notes
 - Release blocker fix requested directly by the user after a broken public `main` release attempt, so no extra approval round is required.
