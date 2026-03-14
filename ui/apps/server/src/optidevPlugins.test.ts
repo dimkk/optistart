@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 
@@ -9,6 +8,7 @@ import type { OptiDevRouteContext } from "./optidevContract";
 import {
   buildNativeRepoAdvice,
   nativePluginAction,
+  readNativePluginInventory,
   recordNativeWorkspaceStarted,
   recordNativeWorkspaceStopped,
 } from "./optidevPlugins";
@@ -70,7 +70,9 @@ describe("optidevPlugins", () => {
     fs.writeFileSync(path.join(homeDir, "config.yaml"), '{"telegram_bot_token":"123456:ABCDEF","telegram_chat_id":55}', "utf8");
 
     const advice = await nativePluginAction(context, "advice", [], projectDir);
-    const telegramStart = await nativePluginAction(context, "telegram", ["start"], projectDir);
+    const telegramStart = await nativePluginAction(context, "telegram", ["start"], projectDir, {
+      threadId: "thread-alpha",
+    });
     const telegramStatus = await nativePluginAction(context, "telegram", ["status"], projectDir);
     const telegramStop = await nativePluginAction(context, "telegram", ["stop"], projectDir);
 
@@ -78,10 +80,27 @@ describe("optidevPlugins", () => {
     expect(advice.lines[0]).toContain(`- root: ${projectDir}`);
     expect(telegramStart.ok).toBe(true);
     expect(telegramStart.lines[0]).toContain("Telegram bridge enabled");
+    expect(telegramStart.lines[1]).toContain("thread-alpha");
     expect(telegramStatus.ok).toBe(true);
     expect(telegramStatus.lines[0]).toContain("enabled for chat 55");
+    expect(telegramStatus.lines[0]).toContain("thread-alpha");
     expect(telegramStop.ok).toBe(true);
     expect(telegramStop.lines[0]).toContain("Telegram bridge disabled");
+  });
+
+  it("returns a simplified current plugin inventory", async () => {
+    const homeDir = makeTempDir("optidev-plugins-home-");
+    const projectDir = makeTempDir("optidev-plugins-project-");
+    const context = makeContext(homeDir, projectDir);
+
+    fs.writeFileSync(path.join(homeDir, "config.yaml"), '{"telegram_bot_token":"123456:ABCDEF","telegram_chat_id":55}', "utf8");
+    await nativePluginAction(context, "telegram", ["start"], projectDir, { threadId: "thread-alpha" });
+
+    const plugins = await readNativePluginInventory(context, projectDir);
+
+    expect(plugins.map((item) => item.id)).toEqual(["advice", "telegram", "skills", "agents"]);
+    expect(plugins.find((item) => item.id === "telegram")?.enabled).toBe(true);
+    expect(plugins.find((item) => item.id === "advice")?.details[0]).toContain("- root:");
   });
 
   it("records native telegram workspace lifecycle events", async () => {
@@ -95,6 +114,44 @@ describe("optidevPlugins", () => {
     const content = fs.readFileSync(path.join(homeDir, "plugins", "telegram-events.jsonl"), "utf8");
     expect(content).toContain("workspace_start");
     expect(content).toContain("workspace_stop");
+  });
+
+  it("keeps the last explicitly enabled session as the telegram target", async () => {
+    const homeDir = makeTempDir("optidev-plugins-home-");
+    const projectDir = makeTempDir("optidev-plugins-project-");
+    const context = makeContext(homeDir, projectDir);
+
+    fs.writeFileSync(path.join(homeDir, "config.yaml"), '{"telegram_bot_token":"123456:ABCDEF","telegram_chat_id":55}', "utf8");
+
+    await nativePluginAction(context, "telegram", ["start"], projectDir, { threadId: "thread-alpha" });
+    const secondStart = await nativePluginAction(context, "telegram", ["start"], projectDir, { threadId: "thread-beta" });
+    const status = await nativePluginAction(context, "telegram", ["status"], projectDir);
+
+    expect(secondStart.ok).toBe(true);
+    expect(secondStart.lines[1]).toContain("thread-beta");
+    expect(status.lines[0]).toContain("thread-beta");
+    expect(status.lines[0]).not.toContain("thread-alpha");
+  });
+
+  it("clears a stale pinned session when telegram start runs without an explicit thread", async () => {
+    const homeDir = makeTempDir("optidev-plugins-home-");
+    const projectDir = makeTempDir("optidev-plugins-project-");
+    const context = makeContext(homeDir, projectDir);
+
+    fs.writeFileSync(path.join(homeDir, "config.yaml"), '{"telegram_bot_token":"123456:ABCDEF","telegram_chat_id":55}', "utf8");
+
+    await nativePluginAction(context, "telegram", ["start"], projectDir, { threadId: "thread-alpha" });
+    const autoStart = await nativePluginAction(context, "telegram", ["start"], projectDir);
+    const status = await nativePluginAction(context, "telegram", ["status"], projectDir);
+    const persisted = JSON.parse(
+      fs.readFileSync(path.join(homeDir, "plugins", "telegram-config.json"), "utf8"),
+    ) as { target_thread_id: string | null; target_updated_at: string | null };
+
+    expect(autoStart.ok).toBe(true);
+    expect(autoStart.lines[1]).toContain("best available active session");
+    expect(status.lines[0]).not.toContain("thread-alpha");
+    expect(persisted.target_thread_id).toBeNull();
+    expect(persisted.target_updated_at).toBeNull();
   });
 
   it("handles native skills search and install commands", async () => {
@@ -138,33 +195,31 @@ describe("optidevPlugins", () => {
     const homeDir = makeTempDir("optidev-plugins-home-");
     const projectDir = makeTempDir("optidev-plugins-project-");
     const context = makeContext(homeDir, projectDir);
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn(async (input: string | URL) => {
+        const url = String(input);
+        if (url.endsWith("/agents?q=code")) {
+          return new Response('<a href="/agents/codegpt"></a>', {
+            status: 200,
+            headers: { "Content-Type": "text/html; charset=utf-8" },
+          });
+        }
+        if (url.endsWith("/agents/codegpt")) {
+          return new Response(
+            '<script type="application/ld+json">' +
+              '{"@context":"https://schema.org","@type":"SoftwareApplication","name":"CodeGPT","description":"Agent desc","url":"https://codegpt.example","applicationCategory":"Software Engineering"}' +
+            "</script>",
+            {
+              status: 200,
+              headers: { "Content-Type": "text/html; charset=utf-8" },
+            },
+          );
+        }
+        return new Response("not found", { status: 404 });
+      }) as typeof fetch;
+    process.env.OPTIDEV_AGENTS_BASE_URL = "https://agents.example";
 
-    const server = http.createServer((req, res) => {
-      if (req.url === "/agents?q=code") {
-        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-        res.end('<a href="/agents/codegpt"></a>');
-        return;
-      }
-      if (req.url === "/agents/codegpt") {
-        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-        res.end(
-          '<script type="application/ld+json">' +
-            '{"@context":"https://schema.org","@type":"SoftwareApplication","name":"CodeGPT","description":"Agent desc","url":"https://codegpt.example","applicationCategory":"Software Engineering"}' +
-          "</script>",
-        );
-        return;
-      }
-      res.writeHead(404);
-      res.end();
-    });
-    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
     try {
-      const address = server.address();
-      if (typeof address !== "object" || address === null) {
-        throw new Error("Expected http server address");
-      }
-      process.env.OPTIDEV_AGENTS_BASE_URL = `http://127.0.0.1:${address.port}`;
-
       const search = await nativePluginAction(context, "agents", ["search", "code"], projectDir);
       const install = await nativePluginAction(context, "agents", ["install", "codegpt"], projectDir);
 
@@ -174,7 +229,7 @@ describe("optidevPlugins", () => {
       expect(install.lines[0]).toContain("Installed agent:");
       expect(fs.existsSync(path.join(projectDir, ".agents", "agents", "codegpt.md"))).toBe(true);
     } finally {
-      await new Promise<void>((resolve, reject) => server.close((error?: Error) => (error ? reject(error) : resolve())));
+      globalThis.fetch = originalFetch;
     }
   });
 });

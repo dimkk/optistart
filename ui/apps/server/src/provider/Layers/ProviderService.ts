@@ -107,6 +107,10 @@ function readPersistedCwd(
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+function shouldRestorePersistedBinding(binding: ProviderRuntimeBinding): boolean {
+  return binding.status === "starting" || binding.status === "running";
+}
+
 const makeProviderService = (options?: ProviderServiceLiveOptions) =>
   Effect.gen(function* () {
     const analytics = yield* Effect.service(AnalyticsService);
@@ -249,6 +253,44 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         const recovered = yield* recoverSessionForThread({ binding, operation: input.operation });
         return { adapter: recovered.adapter, threadId: input.threadId, isActive: true } as const;
       });
+
+    const restorePersistedSessions = Effect.gen(function* () {
+      const threadIds = yield* directory.listThreadIds().pipe(Effect.orElseSucceed(() => []));
+      yield* Effect.forEach(
+        threadIds,
+        (threadId) =>
+          directory.getBinding(threadId).pipe(
+            Effect.flatMap((bindingOption) =>
+              Option.match(bindingOption, {
+                onNone: () => Effect.void,
+                onSome: (binding) => {
+                  if (!shouldRestorePersistedBinding(binding)) {
+                    return Effect.void;
+                  }
+
+                  return recoverSessionForThread({
+                    binding,
+                    operation: "ProviderService.restorePersistedSessions",
+                  }).pipe(
+                    Effect.asVoid,
+                    Effect.catch((cause) =>
+                      Effect.logWarning("provider service failed to restore persisted session", {
+                        threadId,
+                        provider: binding.provider,
+                        status: binding.status ?? null,
+                        hasResumeCursor:
+                          binding.resumeCursor !== null && binding.resumeCursor !== undefined,
+                        cause: cause instanceof Error ? cause.message : String(cause),
+                      }),
+                    ),
+                  );
+                },
+              }),
+            ),
+          ),
+        { concurrency: "unbounded" },
+      ).pipe(Effect.asVoid);
+    });
 
     const startSession: ProviderServiceShape["startSession"] = (threadId, rawInput) =>
       Effect.gen(function* () {
@@ -453,6 +495,16 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     const getCapabilities: ProviderServiceShape["getCapabilities"] = (provider) =>
       registry.getByProvider(provider).pipe(Effect.map((adapter) => adapter.capabilities));
 
+    const readThread: ProviderServiceShape["readThread"] = (threadId) =>
+      Effect.gen(function* () {
+        const routed = yield* resolveRoutableSession({
+          threadId,
+          operation: "ProviderService.readThread",
+          allowRecovery: true,
+        });
+        return yield* routed.adapter.readThread(routed.threadId);
+      });
+
     const rollbackConversation: ProviderServiceShape["rollbackConversation"] = (rawInput) =>
       Effect.gen(function* () {
         const input = yield* decodeInputOrValidationError({
@@ -507,6 +559,8 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       ),
     );
 
+    yield* restorePersistedSessions;
+
     return {
       startSession,
       sendTurn,
@@ -516,6 +570,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
       stopSession,
       listSessions,
       getCapabilities,
+      readThread,
       rollbackConversation,
       streamEvents: Stream.fromPubSub(runtimeEventPubSub),
     } satisfies ProviderServiceShape;

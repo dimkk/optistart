@@ -11,7 +11,9 @@ ROOT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
 ROOT_DIR="$(cd -P "$ROOT_DIR/.." && pwd)"
 
 printf '==> Installing vendored UI dependencies\n'
-bun install --cwd "$ROOT_DIR/ui" --frozen-lockfile
+# Workspace prepare hooks try to patch TypeScript inside per-package node_modules,
+# but Bun hoists it to the workspace root on CI. Keep validation deterministic.
+bun install --cwd "$ROOT_DIR/ui" --frozen-lockfile --ignore-scripts
 
 printf '==> Running repository-owned script tests\n'
 (

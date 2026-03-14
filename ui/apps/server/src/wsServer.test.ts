@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { Effect, Exit, Layer, PlatformError, PubSub, Scope, Stream } from "effect";
+import { Effect, Exit, Layer, Option, PlatformError, PubSub, Scope, Stream } from "effect";
 import { describe, expect, it, afterEach, vi } from "vitest";
 import { createServer } from "./wsServer";
 import WebSocket from "ws";
@@ -44,11 +44,17 @@ import { makeSqlitePersistenceLive, SqlitePersistenceMemory } from "./persistenc
 import { SqlClient, SqlError } from "effect/unstable/sql";
 import { ProviderService, type ProviderServiceShape } from "./provider/Services/ProviderService";
 import { ProviderHealth, type ProviderHealthShape } from "./provider/Services/ProviderHealth";
+import { ProviderSessionDirectory } from "./provider/Services/ProviderSessionDirectory.ts";
+import type {
+  ProviderRuntimeBinding,
+  ProviderSessionDirectoryShape,
+} from "./provider/Services/ProviderSessionDirectory.ts";
 import { Open, type OpenShape } from "./open";
 import { GitManager, type GitManagerShape } from "./git/Services/GitManager.ts";
 import type { GitCoreShape } from "./git/Services/GitCore.ts";
 import { GitCore } from "./git/Services/GitCore.ts";
 import { GitCommandError, GitManagerError } from "./git/Errors.ts";
+import { ProviderSessionDirectoryPersistenceError } from "./provider/Errors.ts";
 import { MigrationError } from "@effect/sql-sqlite-bun/SqliteMigrator";
 import { AnalyticsService } from "./telemetry/Services/AnalyticsService.ts";
 
@@ -82,6 +88,38 @@ const defaultProviderStatuses: ReadonlyArray<ServerProviderStatus> = [
 const defaultProviderHealthService: ProviderHealthShape = {
   getStatuses: Effect.succeed(defaultProviderStatuses),
 };
+
+function makeTestProviderSessionDirectory(): ProviderSessionDirectoryShape {
+  const bindings = new Map<string, ProviderRuntimeBinding>();
+
+  return {
+    upsert: (binding) =>
+      Effect.sync(() => {
+        bindings.set(String(binding.threadId), binding);
+      }),
+    getProvider: (threadId) =>
+      Effect.flatMap(
+        Effect.sync(() => bindings.get(String(threadId))),
+        (binding) =>
+          binding
+            ? Effect.succeed(binding.provider)
+            : Effect.fail(
+                new ProviderSessionDirectoryPersistenceError({
+                  operation: "ProviderSessionDirectory.getProvider",
+                  detail: `No persisted provider binding found for thread '${threadId}'.`,
+                }),
+              ),
+      ),
+    getBinding: (threadId) =>
+      Effect.succeed(Option.fromNullable(bindings.get(String(threadId)))),
+    remove: (threadId) =>
+      Effect.sync(() => {
+        bindings.delete(String(threadId));
+      }),
+    listThreadIds: () =>
+      Effect.succeed(Array.from(bindings.keys()).map((threadId) => asThreadId(threadId))),
+  };
+}
 
 class MockTerminalManager implements TerminalManagerShape {
   private readonly sessions = new Map<string, TerminalSessionSnapshot>();
@@ -370,6 +408,8 @@ describe("WebSocket Server", () => {
   let serverScope: Scope.Closeable | null = null;
   const connections: WebSocket[] = [];
   const tempDirs: string[] = [];
+  const originalOptiDevHome = process.env.OPTIDEV_HOME;
+  const originalDisableTelegramBridge = process.env.OPTIDEV_DISABLE_TELEGRAM_BRIDGE;
 
   function makeTempDir(prefix: string): string {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -390,7 +430,7 @@ describe("WebSocket Server", () => {
       authToken?: string;
       stateDir?: string;
       staticDir?: string;
-      providerLayer?: Layer.Layer<ProviderService, never>;
+      providerLayer?: Layer.Layer<ProviderService | ProviderSessionDirectory, any, any>;
       providerHealth?: ProviderHealthShape;
       open?: OpenShape;
       gitManager?: GitManagerShape;
@@ -403,9 +443,16 @@ describe("WebSocket Server", () => {
     }
 
     const stateDir = options.stateDir ?? makeTempDir("t3code-ws-state-");
+    process.env.OPTIDEV_HOME = makeTempDir("t3code-optidev-home-");
+    process.env.OPTIDEV_DISABLE_TELEGRAM_BRIDGE = "1";
     const scope = await Effect.runPromise(Scope.make("sequential"));
     const persistenceLayer = options.persistenceLayer ?? SqlitePersistenceMemory;
-    const providerLayer = options.providerLayer ?? makeServerProviderLayer();
+    const providerLayer = options.providerLayer
+      ? Layer.merge(
+          options.providerLayer,
+          Layer.succeed(ProviderSessionDirectory, makeTestProviderSessionDirectory()),
+        )
+      : makeServerProviderLayer();
     const providerHealthLayer = Layer.succeed(
       ProviderHealth,
       options.providerHealth ?? defaultProviderHealthService,
@@ -481,6 +528,16 @@ describe("WebSocket Server", () => {
     connections.length = 0;
     await closeTestServer();
     server = null;
+    if (originalOptiDevHome === undefined) {
+      delete process.env.OPTIDEV_HOME;
+    } else {
+      process.env.OPTIDEV_HOME = originalOptiDevHome;
+    }
+    if (originalDisableTelegramBridge === undefined) {
+      delete process.env.OPTIDEV_DISABLE_TELEGRAM_BRIDGE;
+    } else {
+      process.env.OPTIDEV_DISABLE_TELEGRAM_BRIDGE = originalDisableTelegramBridge;
+    }
     for (const dir of tempDirs.splice(0, tempDirs.length)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -1171,6 +1228,7 @@ describe("WebSocket Server", () => {
       stopSession: () => unsupported(),
       listSessions: () => Effect.succeed([]),
       getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
+      readThread: () => unsupported(),
       rollbackConversation: () => unsupported(),
       streamEvents: Stream.fromPubSub(runtimeEventPubSub),
     };

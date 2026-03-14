@@ -76,6 +76,7 @@ import { AnalyticsService } from "./telemetry/Services/AnalyticsService.ts";
 import { expandHomePath } from "./os-jank.ts";
 import { tryHandleOptiDevRequest } from "./optidevRoute";
 import { runServerRunnerAction } from "./optidevRunner";
+import { startOptiDevTelegramBridgeRuntime } from "./optidevTelegramBridge";
 
 /**
  * ServerShape - Service API for server lifecycle control.
@@ -464,6 +465,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
                   providerService,
                   providerSessionDirectory,
                   projectionSnapshotQuery,
+                  orchestrationEngine,
                 }),
               ),
             )
@@ -535,7 +537,10 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
           }
 
           if (devUrl) {
-            respond(302, { Location: devUrl.href });
+            const redirectUrl = new URL(devUrl.href);
+            redirectUrl.pathname = url.pathname;
+            redirectUrl.search = url.search;
+            respond(302, { Location: redirectUrl.toString() });
             return;
           }
 
@@ -657,14 +662,6 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   const subscriptionsScope = yield* Scope.make("sequential");
   yield* Effect.addFinalizer(() => Scope.close(subscriptionsScope, Exit.void));
 
-  yield* Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) =>
-    broadcastPush({
-      type: "push",
-      channel: ORCHESTRATION_WS_CHANNELS.domainEvent,
-      data: event,
-    }),
-  ).pipe(Effect.forkIn(subscriptionsScope));
-
   yield* Stream.runForEach(keybindingsManager.changes, (event) =>
     broadcastPush({
       type: "push",
@@ -745,6 +742,38 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
     ServerRuntimeServices | ServerConfig | FileSystem.FileSystem | Path.Path
   >();
   const runPromise = Effect.runPromiseWith(runtimeServices);
+
+  const telegramBridge =
+    process.env.OPTIDEV_DISABLE_TELEGRAM_BRIDGE === "1"
+      ? null
+      : startOptiDevTelegramBridgeRuntime({
+          context: {
+            cwd,
+            homeDir: process.env.OPTIDEV_HOME,
+          },
+          getSnapshot: () => runPromise(projectionReadModelQuery.getSnapshot()),
+          dispatchCommand: (command) => runPromise(orchestrationEngine.dispatch(command)),
+          logger: (message, details) => {
+            logger.event(message, details ?? {});
+          },
+        });
+  if (telegramBridge) {
+    yield* Effect.addFinalizer(() => Effect.sync(() => telegramBridge.stop()));
+  }
+
+  yield* Stream.runForEach(orchestrationEngine.streamDomainEvents, (event) =>
+    Effect.sync(() => {
+      telegramBridge?.handleDomainEvent(event);
+    }).pipe(
+      Effect.flatMap(() =>
+        broadcastPush({
+          type: "push",
+          channel: ORCHESTRATION_WS_CHANNELS.domainEvent,
+          data: event,
+        }),
+      ),
+    ),
+  ).pipe(Effect.forkIn(subscriptionsScope));
 
   const unsubscribeTerminalEvents = yield* terminalManager.subscribe(
     (event) => void Effect.runPromise(onTerminalEvent(event)),

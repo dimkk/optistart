@@ -96,6 +96,13 @@ function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+function asObject(value: unknown): Record<string, unknown> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  return value as Record<string, unknown>;
+}
+
 function runtimePayloadRecord(event: ProviderRuntimeEvent): Record<string, unknown> | undefined {
   const payload = (event as { payload?: unknown }).payload;
   if (!payload || typeof payload !== "object") {
@@ -133,6 +140,59 @@ function runtimeTurnErrorMessage(event: ProviderRuntimeEvent): string | undefine
 function runtimeErrorMessageFromEvent(event: ProviderRuntimeEvent): string | undefined {
   const payloadMessage = asString(runtimePayloadRecord(event)?.message);
   return payloadMessage;
+}
+
+function extractRealtimeMessageText(item: Record<string, unknown>): string | undefined {
+  const directText = asString(item.text)?.trim();
+  if (directText && directText.length > 0) {
+    return directText;
+  }
+
+  const content = Array.isArray(item.content) ? item.content : [];
+  const parts = content
+    .map((entry) => asString(asObject(entry)?.text)?.trim())
+    .filter((entry): entry is string => typeof entry === "string" && entry.length > 0);
+
+  if (parts.length === 0) {
+    return undefined;
+  }
+  return parts.join("\n\n");
+}
+
+function extractRealtimeThreadMessage(event: ProviderRuntimeEvent): {
+  messageId: MessageId;
+  role: "user" | "assistant";
+  text: string;
+  turnId: TurnId | null;
+} | null {
+  if (event.type !== "thread.realtime.item-added") {
+    return null;
+  }
+
+  const item = asObject(runtimePayloadRecord(event)?.item);
+  const itemType = asString(item?.type);
+  const role =
+    itemType === "userMessage"
+      ? "user"
+      : itemType === "agentMessage" || itemType === "assistantMessage"
+        ? "assistant"
+        : null;
+  if (!role || !item) {
+    return null;
+  }
+
+  const text = extractRealtimeMessageText(item);
+  if (!text) {
+    return null;
+  }
+
+  const rawItemId = asString(item.id) ?? event.itemId ?? event.eventId;
+  return {
+    messageId: MessageId.makeUnsafe(`${role}:${rawItemId}`),
+    role,
+    text,
+    turnId: role === "assistant" ? (toTurnId(event.turnId) ?? null) : null,
+  };
 }
 
 function orchestrationSessionStatusFromRuntimeState(
@@ -971,6 +1031,25 @@ const make = Effect.gen(function* () {
         if (turnId) {
           yield* forgetAssistantMessageId(thread.id, turnId, assistantMessageId);
         }
+      }
+
+      const realtimeThreadMessage = extractRealtimeThreadMessage(event);
+      if (
+        realtimeThreadMessage &&
+        !thread.messages.some((message) => message.id === realtimeThreadMessage.messageId)
+      ) {
+        yield* orchestrationEngine.dispatch({
+          type: "thread.message.import",
+          commandId: providerCommandId(event, "thread-realtime-message-import"),
+          threadId: thread.id,
+          message: {
+            messageId: realtimeThreadMessage.messageId,
+            role: realtimeThreadMessage.role,
+            text: realtimeThreadMessage.text,
+            turnId: realtimeThreadMessage.turnId,
+          },
+          createdAt: now,
+        });
       }
 
       if (proposedPlanCompletion) {

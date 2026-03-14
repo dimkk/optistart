@@ -3,7 +3,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { resolveOptiDevProjectRoot, tryHandleOptiDevRequest } from "./optidevRoute";
 
@@ -86,6 +86,11 @@ async function withRouteServer(
   options: {
     cwd: string;
     homeDir?: string;
+    extraActionHandler?: (
+      action: string,
+      payload: Record<string, unknown>,
+      context: { cwd: string; homeDir?: string },
+    ) => Promise<Record<string, unknown> | null>;
   },
   run: (baseUrl: string) => Promise<void>,
 ): Promise<void> {
@@ -96,7 +101,7 @@ async function withRouteServer(
     });
     req.on("end", () => {
       const url = new URL(req.url ?? "/", "http://127.0.0.1");
-      void tryHandleOptiDevRequest(req, url, requestBody, res, options);
+      void tryHandleOptiDevRequest(req, url, requestBody, res, options, options.extraActionHandler);
     });
   });
 
@@ -262,6 +267,114 @@ describe("optidevRoute", () => {
     });
   });
 
+  it("serves manifest, memory graph, and plugin inventory through native endpoints", async () => {
+    const { repoRoot, uiRoot } = createMockRepoRoot();
+    const homeDir = makeTempDir("optidev-native-home-");
+    fs.mkdirSync(path.join(repoRoot, ".optidev"), { recursive: true });
+    fs.mkdirSync(path.join(repoRoot, "docs", "tasks"), { recursive: true });
+    fs.mkdirSync(path.join(repoRoot, "docs", "features", "runtime", "runtime-ts-002"), {
+      recursive: true,
+    });
+    fs.mkdirSync(path.join(repoRoot, "docs", "releases"), { recursive: true });
+    fs.mkdirSync(path.join(repoRoot, "docs", "v1-2"), { recursive: true });
+    fs.mkdirSync(path.join(repoRoot, "tasks-log"), { recursive: true });
+    fs.writeFileSync(
+      path.join(repoRoot, ".optidev", "workspace.yaml"),
+      [
+        "project: optistart",
+        "workspace:",
+        "  active_task: runtime-ts-002",
+        "  branch: main",
+        "  head_commit: abcdef123456",
+        "  mux: zellij",
+        "agents:",
+        "  - name: coder",
+        "    runner: codex",
+        "layout:",
+        "  - name: Chat",
+        "    pane: chat",
+        "services:",
+        "  - name: web",
+        "    command: bun run dev",
+        "tests:",
+        "  command: bun test --watch",
+        "logs:",
+        "  command: tail -f logs/dev.log",
+        "context:",
+        "  agents_dir: .agents/agents",
+        "  skills_dir: .agents/skills",
+        "  mcp_dir: .agents/mcp",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(repoRoot, ".optidev", "session.json"),
+      JSON.stringify({ active_task: "runtime-ts-002", branch: "main", head_commit: "abcdef123456" }, null, 2),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(repoRoot, "docs", "tasks", "task7-init.md"), "# Task 7\n", "utf8");
+    fs.writeFileSync(path.join(repoRoot, "docs", "tasks", "task7-init-features.md"), "runtime-ts-002\n", "utf8");
+    fs.writeFileSync(
+      path.join(repoRoot, "docs", "features", "runtime", "runtime-ts-002", "runtime-ts-002-staged-ts-runtime-migration.md"),
+      "# runtime-ts-002: staged TS runtime migration\n",
+      "utf8",
+    );
+    fs.writeFileSync(path.join(repoRoot, "docs", "releases", "v1-2.md"), "# Release v1-2\n", "utf8");
+    fs.writeFileSync(
+      path.join(repoRoot, "docs", "v1-2", "features-matrix.md"),
+      [
+        "# Features v1-2",
+        "",
+        "| Feature ID | Title | Status |",
+        "| --- | --- | --- |",
+        "| runtime-ts-002 | Runtime migration | DONE |",
+      ].join("\n"),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(repoRoot, "tasks-log", "task-022-runtime-ts-slice1-report.md"),
+      ["# Task 022", "", "## Decisions", "- stay incremental", "", "## Open loops", "- add graph ui"].join("\n"),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(homeDir, "config.yaml"), '{"telegram_bot_token":"123456:ABCDEF","telegram_chat_id":55}', "utf8");
+
+    await withRouteServer({ cwd: uiRoot, homeDir }, async (baseUrl) => {
+      const manifest = await fetch(`${baseUrl}/api/optidev/manifest`);
+      const manifestImpact = await fetch(`${baseUrl}/api/optidev/manifest/impact`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          content: fs
+            .readFileSync(path.join(repoRoot, ".optidev", "workspace.yaml"), "utf8")
+            .replace("branch: main", "branch: feature/manifest-ui"),
+        }),
+      });
+      const plugins = await fetch(`${baseUrl}/api/optidev/plugins`);
+      const memoryGraph = await fetch(`${baseUrl}/api/optidev/memory-graph`);
+
+      const manifestBody = (await manifest.json()) as { ok: boolean; data: { manifest: { workspace: { branch: string } } } };
+      const impactBody = (await manifestImpact.json()) as {
+        ok: boolean;
+        data: Array<{ field: string; after: string }>;
+      };
+      const pluginsBody = (await plugins.json()) as { ok: boolean; data: Array<{ id: string }> };
+      const memoryGraphBody = (await memoryGraph.json()) as {
+        ok: boolean;
+        data: { focusNodeId: string | null; stats: { features: number } };
+      };
+
+      expect(manifest.status).toBe(200);
+      expect(manifestBody.data.manifest.workspace.branch).toBe("main");
+      expect(impactBody.data).toEqual(
+        expect.arrayContaining([expect.objectContaining({ field: "workspace.branch", after: "feature/manifest-ui" })]),
+      );
+      expect(pluginsBody.data.map((item) => item.id)).toEqual(["advice", "telegram", "skills", "agents"]);
+      expect(memoryGraphBody.data.focusNodeId).toBe("feature:runtime-ts-002");
+      expect(memoryGraphBody.data.stats.features).toBe(1);
+    });
+  });
+
   it("saves plugin files and Telegram config through native endpoints", async () => {
     const { repoRoot, uiRoot } = createMockRepoRoot();
     const homeDir = makeTempDir("optidev-native-home-");
@@ -290,11 +403,11 @@ describe("optidevRoute", () => {
       const saveFileBody = (await saveFile.json()) as { ok: boolean; lines: string[] };
       const saveTelegramBody = (await saveTelegram.json()) as {
         ok: boolean;
-        data: { botToken: string; chatId: string };
+        data: { botToken: string; chatId: string; bridge?: { enabled: boolean } };
       };
       const readTelegramBody = (await readTelegram.json()) as {
         ok: boolean;
-        data: { botToken: string; chatId: string };
+        data: { botToken: string; chatId: string; bridge?: { enabled: boolean } };
       };
 
       expect(saveFile.status).toBe(200);
@@ -304,9 +417,126 @@ describe("optidevRoute", () => {
       ).toContain("# Reviewer");
 
       expect(saveTelegram.status).toBe(200);
-      expect(saveTelegramBody.data).toEqual({ botToken: "token-123", chatId: "42" });
-      expect(readTelegramBody.data).toEqual({ botToken: "token-123", chatId: "42" });
+      expect(saveTelegramBody.data.botToken).toBe("token-123");
+      expect(saveTelegramBody.data.chatId).toBe("42");
+      expect(saveTelegramBody.data.bridge?.enabled).toBe(false);
+      expect(readTelegramBody.data.botToken).toBe("token-123");
+      expect(readTelegramBody.data.chatId).toBe("42");
+      expect(readTelegramBody.data.bridge?.enabled).toBe(false);
       expect(fs.readFileSync(path.join(homeDir, "config.yaml"), "utf8")).toContain("telegram_bot_token");
+    });
+  });
+
+  it("serves manifest, memory graph, and plugin inventory through native endpoints", async () => {
+    const { repoRoot, uiRoot } = createMockRepoRoot();
+    const homeDir = makeTempDir("optidev-native-home-");
+    fs.mkdirSync(path.join(repoRoot, ".optidev"), { recursive: true });
+    fs.mkdirSync(path.join(repoRoot, "docs", "tasks"), { recursive: true });
+    fs.mkdirSync(path.join(repoRoot, "docs", "features", "runtime", "runtime-ts-002"), {
+      recursive: true,
+    });
+    fs.mkdirSync(path.join(repoRoot, "docs", "releases"), { recursive: true });
+    fs.mkdirSync(path.join(repoRoot, "docs", "v1-2"), { recursive: true });
+    fs.mkdirSync(path.join(repoRoot, "tasks-log"), { recursive: true });
+    fs.writeFileSync(
+      path.join(repoRoot, ".optidev", "workspace.yaml"),
+      [
+        "project: demo",
+        "workspace:",
+        "  active_task: runtime-ts-002",
+        "  branch: main",
+        "  head_commit: 1234567890abcdef",
+        "  mux: zellij",
+        "agents:",
+        "  - name: coder",
+        "    runner: codex",
+        "layout:",
+        "  - name: Chat",
+        "    pane: chat",
+        "services:",
+        "  - name: web",
+        "    command: bun run dev",
+        "tests:",
+        "  command: bun test --watch",
+        "logs:",
+        "  command: tail -f logs/dev.log",
+        "context:",
+        "  agents_dir: .agents/agents",
+        "  skills_dir: .agents/skills",
+        "  mcp_dir: .agents/mcp",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(repoRoot, ".optidev", "session.json"),
+      JSON.stringify({ active_task: "runtime-ts-002", manifest_fingerprint: "old" }, null, 2),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(repoRoot, "docs", "tasks", "task7-init.md"), "# Task 7\n", "utf8");
+    fs.writeFileSync(path.join(repoRoot, "docs", "tasks", "task7-init-features.md"), "runtime-ts-002\n", "utf8");
+    fs.writeFileSync(
+      path.join(repoRoot, "docs", "features", "runtime", "runtime-ts-002", "runtime-ts-002-staged-ts-runtime-migration.md"),
+      "# runtime-ts-002: staged TS runtime migration\n",
+      "utf8",
+    );
+    fs.writeFileSync(path.join(repoRoot, "docs", "releases", "v1-2.md"), "# Release v1-2\n", "utf8");
+    fs.writeFileSync(
+      path.join(repoRoot, "docs", "v1-2", "features-matrix.md"),
+      [
+        "# Features v1-2",
+        "",
+        "| Feature ID | Title | Status |",
+        "| --- | --- | --- |",
+        "| runtime-ts-002 | Runtime migration | DONE |",
+      ].join("\n"),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(repoRoot, "tasks-log", "task-022-runtime-ts-slice1-report.md"),
+      ["# Task 022", "", "## Decisions", "- stay incremental", "", "## Open loops", "- native memory queries"].join("\n"),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(homeDir, "config.yaml"), '{"telegram_bot_token":"123456:ABCDEF","telegram_chat_id":55}', "utf8");
+
+    await withRouteServer({ cwd: uiRoot, homeDir }, async (baseUrl) => {
+      const manifest = await fetch(`${baseUrl}/api/optidev/manifest`);
+      const impact = await fetch(`${baseUrl}/api/optidev/manifest/impact`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          content: fs.readFileSync(path.join(repoRoot, ".optidev", "workspace.yaml"), "utf8").replace("branch: main", "branch: feature/sandbox"),
+        }),
+      });
+      const saveManifest = await fetch(`${baseUrl}/api/optidev/manifest`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          content: fs.readFileSync(path.join(repoRoot, ".optidev", "workspace.yaml"), "utf8").replace("branch: main", "branch: feature/sandbox"),
+        }),
+      });
+      const memoryGraph = await fetch(`${baseUrl}/api/optidev/memory-graph`);
+      const plugins = await fetch(`${baseUrl}/api/optidev/plugins`);
+
+      const manifestBody = (await manifest.json()) as { ok: boolean; data: { manifest: { workspace: { branch: string } } } };
+      const impactBody = (await impact.json()) as { ok: boolean; data: Array<{ field: string }> };
+      const saveManifestBody = (await saveManifest.json()) as { ok: boolean; lines: string[]; data: { manifest: { workspace: { branch: string } } } };
+      const memoryGraphBody = (await memoryGraph.json()) as { ok: boolean; data: { focusNodeId: string | null; nodes: Array<{ id: string }> } };
+      const pluginsBody = (await plugins.json()) as { ok: boolean; data: Array<{ id: string; summary: string }> };
+
+      expect(manifest.status).toBe(200);
+      expect(manifestBody.data.manifest.workspace.branch).toBe("main");
+      expect(impact.status).toBe(200);
+      expect(impactBody.data.some((item) => item.field === "workspace.branch")).toBe(true);
+      expect(saveManifest.status).toBe(200);
+      expect(saveManifestBody.lines[0]).toContain("manifest saved");
+      expect(saveManifestBody.data.manifest.workspace.branch).toBe("feature/sandbox");
+      expect(memoryGraph.status).toBe(200);
+      expect(memoryGraphBody.data.focusNodeId).toBe("feature:runtime-ts-002");
+      expect(memoryGraphBody.data.nodes.some((node) => node.id === "open_loop:0")).toBe(true);
+      expect(plugins.status).toBe(200);
+      expect(pluginsBody.data.map((item) => item.id)).toEqual(["advice", "telegram", "skills", "agents"]);
+      expect(pluginsBody.data[1]?.summary).toContain("Telegram bridge");
     });
   });
 
@@ -382,6 +612,208 @@ describe("optidevRoute", () => {
       expect(body.ok).toBe(true);
       expect(body.lines[0]).toContain("Project: demo");
     });
+  });
+
+  it("serves machine-local Codex session inventory through the live OptiDev route", async () => {
+    const { uiRoot } = createMockRepoRoot();
+
+    await withRouteServer(
+      {
+        cwd: uiRoot,
+        extraActionHandler: async (action) => {
+          if (action !== "codex_sessions") {
+            return null;
+          }
+          return {
+            ok: true,
+            lines: [
+              "1. runner=codex | guid=thread-alpha | cwd=/repo/demo | user=\"Fix landing hero spacing and keep the CTA visible on mobile.\" | runtime=running | session=running",
+            ],
+            data: [
+              {
+                alias: 1,
+                runner: "codex",
+                guid: "thread-alpha",
+                cwd: "/repo/demo",
+                latestUserPhrase: "Fix landing hero spacing and keep the CTA visible on mobile.",
+                runtimeStatus: "running",
+                sessionStatus: "running",
+                lastSeenAt: "2026-03-12T09:10:00.000Z",
+                manifestStatus: "missing",
+                manifestNote: "No OptiDev workspace manifest found for this session.",
+              },
+            ],
+          };
+        },
+      },
+      async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/api/optidev/action`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "codex_sessions" }),
+        });
+        const body = (await response.json()) as {
+          ok: boolean;
+          data: Array<{ manifestStatus: string; guid: string }>;
+        };
+
+        expect(response.status).toBe(200);
+        expect(body.ok).toBe(true);
+        expect(body.data[0]).toMatchObject({
+          guid: "thread-alpha",
+          manifestStatus: "missing",
+        });
+      },
+    );
+  });
+
+  it("serves Codex session attach through the live OptiDev route", async () => {
+    const { uiRoot } = createMockRepoRoot();
+
+    await withRouteServer(
+      {
+        cwd: uiRoot,
+        extraActionHandler: async (action) => {
+          if (action !== "codex_connect") {
+            return null;
+          }
+          return {
+            ok: true,
+            lines: ["Connected Codex session thread-alpha."],
+            data: {
+              threadId: "thread-alpha",
+              guid: "thread-alpha",
+              cwd: "/repo/demo",
+            },
+          };
+        },
+      },
+      async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/api/optidev/action`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "codex_connect", identifier: "thread-alpha" }),
+        });
+        const body = (await response.json()) as {
+          ok: boolean;
+          data: { threadId: string; guid: string };
+        };
+
+        expect(response.status).toBe(200);
+        expect(body.ok).toBe(true);
+        expect(body.data).toEqual({
+          threadId: "thread-alpha",
+          guid: "thread-alpha",
+          cwd: "/repo/demo",
+        });
+      },
+    );
+  });
+
+  it("serves local and channel version build info through the native route", async () => {
+    const { repoRoot, uiRoot } = createMockRepoRoot();
+    const originalFetch = globalThis.fetch;
+
+    fs.writeFileSync(
+      path.join(repoRoot, "ui", "apps", "server", "package.json"),
+      JSON.stringify({ version: "9.9.9-local" }, null, 2),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(repoRoot, "ui", ".t3code-upstream.json"),
+      JSON.stringify(
+        {
+          upstream: {
+            url: "https://github.com/pingdotgg/t3code",
+            baseRef: "1234567890abcdef1234567890abcdef12345678",
+            baseCommitSubject: "Upstream baseline subject",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(repoRoot, "scripts", "release-manifest.json"),
+      JSON.stringify(
+        {
+          version: "9.9.9-alpha.7",
+          repository: {
+            url: "https://github.com/dimkk/optistart",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const target =
+        typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+
+      if (target === "https://raw.githubusercontent.com/dimkk/optistart/main/scripts/release-manifest.json") {
+        return Promise.resolve(
+          new Response(JSON.stringify({ version: "0.0.3" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+
+      if (target === "https://raw.githubusercontent.com/dimkk/optistart/test/scripts/release-manifest.json") {
+        return Promise.resolve(
+          new Response(JSON.stringify({ version: "0.0.4-alpha.1" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+
+      if (target === "https://api.github.com/repos/pingdotgg/t3code/releases/latest") {
+        return Promise.resolve(
+          new Response(JSON.stringify({ tag_name: "v0.37.2" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        );
+      }
+
+      return originalFetch(input, init);
+    });
+
+    try {
+      await withRouteServer({ cwd: uiRoot }, async (baseUrl) => {
+        const response = await fetch(`${baseUrl}/api/optidev/action`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "build_info" }),
+        });
+        const body = (await response.json()) as {
+          ok: boolean;
+          data: {
+            localT3Version: string | null;
+            upstreamT3Version: string | null;
+            upstreamT3Subject: string | null;
+            optidProdVersion: string | null;
+            optidNightlyVersion: string | null;
+          };
+        };
+
+        expect(response.status).toBe(200);
+        expect(body.ok).toBe(true);
+        expect(body.data).toEqual({
+          localT3Version: "9.9.9-local",
+          upstreamT3Version: "0.37.2",
+          upstreamT3Subject: "Upstream baseline subject",
+          optidProdVersion: "0.0.3",
+          optidNightlyVersion: "0.0.4-alpha.1",
+        });
+      });
+    } finally {
+      fetchSpy.mockRestore();
+    }
   });
 
   it("serves native memory actions without fallback", async () => {

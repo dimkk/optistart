@@ -50,6 +50,11 @@ import {
 import { gitBranchesQueryOptions, gitCreateWorktreeMutationOptions } from "~/lib/gitReactQuery";
 import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
 import { serverConfigQueryOptions, serverQueryKeys } from "~/lib/serverReactQuery";
+import { debugOptiDev } from "~/optidevDebug";
+import {
+  fetchTelegramConfig,
+  runTelegramBridgeAction,
+} from "~/optidevTelegram";
 
 import { isElectron } from "../env";
 import { parseDiffRouteSearch, stripDiffSearchParams } from "../diffRouteSearch";
@@ -173,6 +178,7 @@ import {
 } from "./Icons";
 import { cn, isMacPlatform, isWindowsPlatform } from "~/lib/utils";
 import { Badge } from "./ui/badge";
+import { Switch } from "./ui/switch";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import { Command, CommandItem, CommandList } from "./ui/command";
 import {
@@ -257,6 +263,71 @@ const IMAGE_ONLY_BOOTSTRAP_PROMPT =
   "[User attached one or more images without additional text. Respond using the conversation context and the attached image(s).]";
 const EMPTY_ACTIVITIES: OrchestrationThreadActivity[] = [];
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
+
+function TelegramBridgeToggle({ threadId }: { threadId: ThreadId }) {
+  const queryClient = useQueryClient();
+  const telegramQuery = useQuery({
+    queryKey: ["optidev", "telegram-config"],
+    queryFn: fetchTelegramConfig,
+    refetchInterval: 10_000,
+  });
+  const toggleMutation = useMutation({
+    mutationFn: (enabled: boolean) => runTelegramBridgeAction({ enabled, threadId }),
+    onSuccess: async (result, enabled) => {
+      await queryClient.invalidateQueries({ queryKey: ["optidev", "telegram-config"] });
+      toastManager.add({
+        type: "info",
+        title: enabled ? "Telegram enabled" : "Telegram disabled",
+        description: result.lines[0] ?? undefined,
+      });
+    },
+    onError: (error) => {
+      toastManager.add({
+        type: "error",
+        title: "Telegram toggle failed",
+        description: error instanceof Error ? error.message : "Failed to toggle Telegram bridge.",
+      });
+    },
+  });
+
+  const bridge = telegramQuery.data?.bridge;
+  const currentThreadSelected =
+    Boolean(bridge?.enabled) &&
+    (bridge?.targetThreadId === null || bridge?.targetThreadId === threadId);
+  const statusLabel = bridge?.enabled
+    ? currentThreadSelected
+      ? "On here"
+      : "On elsewhere"
+    : "Off";
+  const tooltipLabel = bridge?.enabled
+    ? currentThreadSelected
+      ? bridge.statusLine
+      : `${bridge.statusLine} Last enabled session: ${bridge.targetThreadId ?? "unknown"}.`
+    : bridge?.statusLine ?? "Telegram bridge is disabled.";
+
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <div className="flex shrink-0 items-center gap-2 rounded-full border border-border bg-background px-2 py-1">
+            <span className="text-xs text-muted-foreground">Telegram</span>
+            <Badge variant={currentThreadSelected ? "default" : "outline"} className="h-5 rounded-full px-1.5 text-[10px]">
+              {statusLabel}
+            </Badge>
+            <Switch
+              checked={currentThreadSelected}
+              disabled={telegramQuery.isLoading || toggleMutation.isPending}
+              aria-label="Toggle Telegram bridge for this chat"
+              data-testid="chat-telegram-toggle"
+              onCheckedChange={(checked) => toggleMutation.mutate(Boolean(checked))}
+            />
+          </div>
+        }
+      />
+      <TooltipPopup side="bottom">{tooltipLabel}</TooltipPopup>
+    </Tooltip>
+  );
+}
 const EMPTY_PROJECT_ENTRIES: ProjectEntry[] = [];
 const EMPTY_AVAILABLE_EDITORS: EditorId[] = [];
 const EMPTY_PROVIDER_STATUSES: ServerProviderStatus[] = [];
@@ -757,6 +828,30 @@ export default function ChatView({ threadId }: ChatViewProps) {
     composerDraft.interactionMode ?? activeThread?.interactionMode ?? DEFAULT_INTERACTION_MODE;
   const isServerThread = serverThread !== undefined;
   const isLocalDraftThread = !isServerThread && localDraftThread !== undefined;
+
+  useEffect(() => {
+    debugOptiDev("chat.view.thread", {
+      threadId,
+      hasServerThread: isServerThread,
+      hasLocalDraftThread: isLocalDraftThread,
+      activeThreadId: activeThread?.id ?? null,
+      activeThreadTitle: activeThread?.title ?? null,
+      messageCount: activeThread?.messages.length ?? 0,
+      sessionStatus: activeThread?.session?.orchestrationStatus ?? activeThread?.session?.status ?? null,
+      latestTurnId: activeThread?.latestTurn?.turnId ?? null,
+      worktreePath: activeThread?.worktreePath ?? null,
+    });
+
+    if (isServerThread && activeThread && activeThread.messages.length === 0) {
+      debugOptiDev("chat.view.empty-transcript", {
+        threadId,
+        title: activeThread.title,
+        sessionStatus:
+          activeThread.session?.orchestrationStatus ?? activeThread.session?.status ?? null,
+        note: "Thread is mounted, but no messages are present in the synced orchestration snapshot.",
+      });
+    }
+  }, [activeThread, isLocalDraftThread, isServerThread, threadId]);
   const diffSearch = useMemo(
     () => parseDiffRouteSearch(rawSearch as Record<string, unknown>),
     [rawSearch],
@@ -793,6 +888,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
       activeThread.messages.length > 0 ||
       activeThread.session !== null),
   );
+
   const selectedServiceTierSetting = settings.codexServiceTier;
   const selectedServiceTier = resolveAppServiceTier(selectedServiceTierSetting);
   const lockedProvider: ProviderKind | null = hasThreadStarted
@@ -4043,6 +4139,7 @@ const ChatHeader = memo(function ChatHeader({
             openInCwd={openInCwd}
           />
         )}
+        <TelegramBridgeToggle threadId={activeThreadId} />
         {activeProjectName && <GitActionsControl gitCwd={gitCwd} activeThreadId={activeThreadId} />}
         <Tooltip>
           <TooltipTrigger

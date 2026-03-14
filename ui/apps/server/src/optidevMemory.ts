@@ -3,7 +3,12 @@ import path from "node:path";
 
 import YAML from "yaml";
 
-import type { OptiDevActionResponse } from "./optidevContract";
+import type {
+  OptiDevActionResponse,
+  OptiDevMemoryGraphEdgePayload,
+  OptiDevMemoryGraphNodePayload,
+  OptiDevMemoryGraphPayload,
+} from "./optidevContract";
 
 interface FeatureRecord {
   featureId: string;
@@ -454,4 +459,150 @@ export async function nativeMemoryShow(
   }
 
   return { ok: false, lines: ["Usage: optid memory show [feature|task|release] <id>"] };
+}
+
+export async function buildMemoryGraphPayload(projectRoot: string): Promise<OptiDevMemoryGraphPayload> {
+  const model = await buildMemoryModel(projectRoot);
+  const nodes: OptiDevMemoryGraphNodePayload[] = [];
+  const edges: OptiDevMemoryGraphEdgePayload[] = [];
+  let decisionCount = 0;
+
+  nodes.push({
+    id: `project:${model.project}`,
+    kind: "project",
+    label: model.project,
+    status: null,
+    group: "project",
+    highlight: true,
+  });
+
+  for (const release of [...model.releases.values()].sort((left, right) => left.releaseId.localeCompare(right.releaseId))) {
+    nodes.push({
+      id: `release:${release.releaseId}`,
+      kind: "release",
+      label: release.releaseId,
+      status: null,
+      group: "release",
+      highlight: false,
+    });
+    edges.push({
+      source: `project:${model.project}`,
+      target: `release:${release.releaseId}`,
+      kind: "tracks-release",
+    });
+  }
+
+  for (const task of [...model.tasks.values()].sort((left, right) => left.taskId.localeCompare(right.taskId))) {
+    nodes.push({
+      id: `task:${task.taskId}`,
+      kind: "task",
+      label: task.taskId,
+      status: null,
+      group: "task",
+      highlight: false,
+    });
+    edges.push({
+      source: `project:${model.project}`,
+      target: `task:${task.taskId}`,
+      kind: "tracks-task",
+    });
+  }
+
+  for (const feature of [...model.features.values()].sort((left, right) => left.featureId.localeCompare(right.featureId))) {
+    nodes.push({
+      id: `feature:${feature.featureId}`,
+      kind: "feature",
+      label: feature.featureId,
+      status: feature.status,
+      group: feature.component,
+      highlight: feature.featureId === model.activeFeature,
+    });
+    edges.push({
+      source: `project:${model.project}`,
+      target: `feature:${feature.featureId}`,
+      kind: feature.featureId === model.activeFeature ? "active-feature" : "tracks-feature",
+    });
+
+    for (const releaseId of feature.releases) {
+      edges.push({
+        source: `release:${releaseId}`,
+        target: `feature:${feature.featureId}`,
+        kind: "ships",
+      });
+    }
+
+    for (const [taskId, task] of model.tasks.entries()) {
+      if (task.features.includes(feature.featureId)) {
+        edges.push({
+          source: `task:${taskId}`,
+          target: `feature:${feature.featureId}`,
+          kind: "implements",
+        });
+      }
+    }
+
+    feature.decisions.forEach((decision, index) => {
+      const nodeId = `decision:${feature.featureId}:${index}`;
+      decisionCount += 1;
+      nodes.push({
+        id: nodeId,
+        kind: "decision",
+        label: decision.title,
+        status: null,
+        group: feature.component,
+        highlight: false,
+      });
+      edges.push({
+        source: `feature:${feature.featureId}`,
+        target: nodeId,
+        kind: "decides",
+      });
+    });
+  }
+
+  model.openLoops.forEach((loop, index) => {
+    const featureId = loop.featureId || model.activeFeature;
+    const nodeId = `open_loop:${index}`;
+    nodes.push({
+      id: nodeId,
+      kind: "open_loop",
+      label: loop.description,
+      status: loop.status,
+      group: featureId || "unscoped",
+      highlight: false,
+    });
+    if (featureId) {
+      edges.push({
+        source: `feature:${featureId}`,
+        target: nodeId,
+        kind: "open-loop",
+      });
+    } else {
+      edges.push({
+        source: `project:${model.project}`,
+        target: nodeId,
+        kind: "open-loop",
+      });
+    }
+  });
+
+  return {
+    project: model.project,
+    focusNodeId: model.activeFeature ? `feature:${model.activeFeature}` : null,
+    nodes,
+    edges,
+    stats: {
+      features: model.features.size,
+      tasks: model.tasks.size,
+      releases: model.releases.size,
+      decisions: decisionCount,
+      openLoops: model.openLoops.length,
+    },
+    implementationNotes: [
+      "Keep ingestion artifact-backed: every node should be traceable to docs, reports, releases, or session state.",
+      "Start with deterministic lane layout by node kind, then add force or dagre-style layout only after filters and pinning exist.",
+      "Preserve graph IDs across refreshes so selection, expansion, and future persisted user state stay stable.",
+      "Use the graph as navigation over memory, not as a separate source of truth.",
+    ],
+  };
 }

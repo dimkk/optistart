@@ -7,12 +7,14 @@ Fork upstream `t3code` into this repository and integrate OptiDev into the forke
 - The repository vendors upstream `t3code` as the actual UI/server base.
 - The forked UI exposes the main OptiDev feature surfaces at `/optidev` inside the upstream route tree:
   - projects
+  - manifest-first workspace management
   - workspace runtime actions
   - workspace clone
-  - memory
+  - repository file browsing with shared markdown rendering
+  - graph-backed memory context
   - logs/status
-  - plugins and plugin-backed commands
-- The forked `t3` server/runtime layer exposes `/api/optidev/health`, `/api/optidev/state`, and `/api/optidev/action`, all handled natively in the TS/Bun runtime.
+  - native plugin inventory and plugin-backed commands
+- The forked `t3` server/runtime layer exposes `/api/optidev/health`, `/api/optidev/state`, `/api/optidev/action`, `/api/optidev/manifest`, `/api/optidev/manifest/impact`, `/api/optidev/memory-graph`, `/api/optidev/plugins`, and the repository file endpoints, all handled natively in the TS/Bun runtime.
 - E2E covers navigation from the stock `t3` shell into `/optidev` and validates runtime/stateful actions through the embedded native route.
 
 ## Notes

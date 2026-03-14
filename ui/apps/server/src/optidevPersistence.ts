@@ -198,14 +198,16 @@ async function buildDefaultManifest(projectPath: string, defaultRunner: string):
   };
 }
 
-export async function loadManifest(manifestPath: string): Promise<WorkspaceManifest> {
-  const data = await loadMapping(manifestPath);
+export function normalizeWorkspaceManifest(
+  data: Record<string, unknown>,
+  fallbackProject: string,
+): WorkspaceManifest {
   const workspace = asObject(data.workspace);
   const tests = asObject(data.tests);
   const logs = asObject(data.logs);
   const context = asObject(data.context);
   return {
-    project: asString(data.project, path.basename(path.dirname(manifestPath))),
+    project: asString(data.project, fallbackProject),
     workspace: {
       active_task: asString(workspace?.active_task),
       branch: asString(workspace?.branch, "main"),
@@ -252,6 +254,11 @@ export async function loadManifest(manifestPath: string): Promise<WorkspaceManif
       mcp_dir: asString(context?.mcp_dir, ".agents/mcp"),
     },
   };
+}
+
+export async function loadManifest(manifestPath: string): Promise<WorkspaceManifest> {
+  const data = await loadMapping(manifestPath);
+  return normalizeWorkspaceManifest(data, path.basename(path.dirname(manifestPath)));
 }
 
 export async function writeYaml(filePath: string, payload: unknown): Promise<void> {

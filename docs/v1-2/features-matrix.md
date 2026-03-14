@@ -33,6 +33,9 @@
 | cli-runner-002 | Runner session inventory through `optid runner ls` | DONE |
 | cli-runner-003 | Alias-based runner session resume through `optid runner resume <id>` | DONE |
 | ui-shell-002 | OptiDev first-class `t3code` shell integration and stable route UX | DONE |
-| repo-files-002 | Repository file explorer and typed file viewer inside OptiDev | DONE |
-| runtime-session-002 | Session and restore management surface inside the integrated OptiDev UI | DONE |
-| plugins-config-001 | Integrated editing for agents, skills, and Telegram configuration | DONE |
+| repo-files-002 | Repository file explorer and typed file viewer inside OptiDev | DEVELOPING |
+| runtime-session-002 | Session and restore management surface inside the integrated OptiDev UI | DEVELOPING |
+| runtime-session-003 | Machine-local Codex session inventory with manifest presence markers in the shell sidebar | DONE |
+| runtime-session-004 | Machine-local Codex session attach from the shell sidebar into native `t3code` chat | DONE |
+| plugins-config-001 | Integrated editing for agents, skills, and Telegram configuration | DEVELOPING |
+| ui-shell-003 | Manifest-first OptiDev workspace management surface | DONE |

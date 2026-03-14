@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   buildMemoryModel,
+  buildMemoryGraphPayload,
   nativeMemoryOpenLoops,
   nativeMemoryShow,
   nativeMemorySummary,
@@ -134,5 +135,19 @@ describe("optidevMemory", () => {
     expect(release.ok).toBe(true);
     expect(release.lines).toContain("Release: v1-2");
     expect(release.lines.join("\n")).toContain("Features: runtime-ts-002, ui-t3code-001");
+  });
+
+  it("builds a structured memory graph payload for the UI", async () => {
+    const projectRoot = makeTempDir("optidev-memory-project-");
+    seedProject(projectRoot);
+
+    const graph = await buildMemoryGraphPayload(projectRoot);
+
+    expect(graph.project).toBe(path.basename(projectRoot));
+    expect(graph.focusNodeId).toBe("feature:runtime-ts-002");
+    expect(graph.stats.features).toBe(1);
+    expect(graph.nodes.some((node) => node.id === "feature:runtime-ts-002" && node.highlight)).toBe(true);
+    expect(graph.edges.some((edge) => edge.kind === "implements")).toBe(true);
+    expect(graph.implementationNotes[0]).toContain("artifact-backed");
   });
 });

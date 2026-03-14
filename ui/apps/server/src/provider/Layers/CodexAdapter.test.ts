@@ -742,6 +742,104 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
   );
 });
 
+const followManager = new FakeCodexManager();
+const followLayer = it.layer(
+  makeCodexAdapterLive({
+    manager: followManager,
+    resumedThreadFollowIntervalMs: 25,
+  }).pipe(
+    Layer.provideMerge(ServerConfig.layerTest(process.cwd(), process.cwd())),
+    Layer.provideMerge(providerSessionDirectoryTestLayer),
+    Layer.provideMerge(NodeServices.layer),
+  ),
+);
+
+followLayer("CodexAdapterLive resumed-thread follow bridge", (it) => {
+  it.effect("emits realtime item-added runtime events for new items on a resumed thread", () =>
+    Effect.gen(function* () {
+      followManager.startSessionImpl.mockImplementationOnce(async (input) => {
+        const now = new Date().toISOString();
+        return {
+          provider: "codex",
+          status: "ready",
+          runtimeMode: input.runtimeMode,
+          threadId: input.threadId,
+          cwd: input.cwd,
+          createdAt: now,
+          updatedAt: now,
+          resumeCursor: { threadId: "thread-1" },
+        };
+      });
+
+      let readCount = 0;
+      followManager.readThreadImpl.mockImplementation(async () => {
+        readCount += 1;
+        if (readCount === 1) {
+          return {
+            threadId: asThreadId("thread-1"),
+            turns: [
+              {
+                id: asTurnId("turn-1"),
+                items: [
+                  {
+                    type: "userMessage",
+                    id: "item-1",
+                    content: [{ type: "text", text: "hello" }],
+                  },
+                ],
+              },
+            ],
+          };
+        }
+        return {
+          threadId: asThreadId("thread-1"),
+          turns: [
+            {
+              id: asTurnId("turn-1"),
+              items: [
+                {
+                  type: "userMessage",
+                  id: "item-1",
+                  content: [{ type: "text", text: "hello" }],
+                },
+                {
+                  type: "agentMessage",
+                  id: "item-2",
+                  text: "followed externally",
+                },
+              ],
+            },
+          ],
+        };
+      });
+
+      const adapter = yield* CodexAdapter;
+      const firstEventFiber = yield* Stream.runHead(adapter.streamEvents).pipe(Effect.forkChild);
+
+      yield* adapter.startSession({
+        provider: "codex",
+        threadId: asThreadId("thread-1"),
+        runtimeMode: "full-access",
+        resumeCursor: { threadId: "thread-1" },
+      });
+
+      const firstEvent = yield* Fiber.join(firstEventFiber);
+
+      assert.equal(firstEvent._tag, "Some");
+      if (firstEvent._tag !== "Some") {
+        return;
+      }
+      assert.equal(firstEvent.value.type, "thread.realtime.item-added");
+      if (firstEvent.value.type !== "thread.realtime.item-added") {
+        return;
+      }
+      assert.equal(firstEvent.value.threadId, "thread-1");
+      assert.equal(firstEvent.value.turnId, "turn-1");
+      assert.equal((firstEvent.value.payload.item as { id?: string }).id, "item-2");
+    }),
+  );
+});
+
 afterAll(() => {
   if (lifecycleManager.stopAllImpl.mock.calls.length === 0) {
     lifecycleManager.stopAll();

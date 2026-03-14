@@ -19,6 +19,7 @@ import {
   nativeMemoryOpenLoops,
   nativeMemoryShow,
   nativeMemorySummary,
+  buildMemoryGraphPayload,
 } from "./optidevMemory";
 import {
   nativeInitAction,
@@ -30,7 +31,12 @@ import {
   nativeResumeAction,
   nativeStartAction,
 } from "./optidevStartup";
-import { nativePluginAction, supportsNativePluginCommand } from "./optidevPlugins";
+import {
+  nativePluginAction,
+  readNativePluginInventory,
+  readTelegramBridgeStatus,
+  supportsNativePluginCommand,
+} from "./optidevPlugins";
 import {
   listScopedDirectory,
   readScopedFile,
@@ -38,6 +44,12 @@ import {
   writeScopedTextFile,
 } from "./optidevFiles";
 import { readTelegramConfig, writeTelegramConfig } from "./optidevConfig";
+import { nativeBuildInfoAction } from "./optidevBuildInfo";
+import {
+  describeOptiDevManifestRuntime,
+  previewOptiDevManifestImpact,
+  saveOptiDevManifest,
+} from "./optidevManifest";
 
 export type { OptiDevActionPayload, OptiDevActionResponse } from "./optidevContract";
 export { resolveOptiDevProjectRoot } from "./optidevContract";
@@ -141,6 +153,14 @@ async function runOptiDevAction(
     }
   }
 
+  if (action === "build_info") {
+    try {
+      return await nativeBuildInfoAction(context);
+    } catch (error) {
+      return toErrorResponse(error, "Failed to resolve OptiDev build information.");
+    }
+  }
+
   if (action === "init") {
     try {
       return await nativeInitAction(
@@ -235,6 +255,7 @@ async function runOptiDevAction(
         command,
         args,
         await resolveActionCwd(context, payload),
+        normalizedPayload,
       );
     } catch (error) {
       return toErrorResponse(error, "Failed to run OptiDev plugin action.");
@@ -293,6 +314,87 @@ export async function tryHandleOptiDevRequest(
   if (url.pathname === "/api/optidev/state") {
     const result = await runOptiDevAction("state", {}, context);
     json(res, result.ok ? 200 : 400, result);
+    return true;
+  }
+
+  if (url.pathname === "/api/optidev/manifest" && method === "GET") {
+    try {
+      const projectRoot = resolveOptiDevProjectRoot(context.cwd);
+      json(res, 200, {
+        ok: true,
+        data: await describeOptiDevManifestRuntime(projectRoot, context),
+      });
+    } catch (error) {
+      json(res, 400, toErrorResponse(error, "Failed to read OptiDev manifest."));
+    }
+    return true;
+  }
+
+  if (url.pathname === "/api/optidev/manifest" && method === "POST") {
+    let payload: OptiDevActionPayload;
+    try {
+      payload = reqBody.trim().length > 0 ? (JSON.parse(reqBody) as OptiDevActionPayload) : {};
+    } catch {
+      json(res, 400, { ok: false, lines: ["Invalid JSON body."] });
+      return true;
+    }
+    try {
+      const projectRoot = resolveOptiDevProjectRoot(context.cwd);
+      const saved = await saveOptiDevManifest(projectRoot, context, String(payload.content ?? ""));
+      json(res, 200, {
+        ok: true,
+        lines: saved.lines,
+        data: saved.payload,
+      });
+    } catch (error) {
+      json(res, 400, toErrorResponse(error, "Failed to save OptiDev manifest."));
+    }
+    return true;
+  }
+
+  if (url.pathname === "/api/optidev/manifest/impact" && method === "POST") {
+    let payload: OptiDevActionPayload;
+    try {
+      payload = reqBody.trim().length > 0 ? (JSON.parse(reqBody) as OptiDevActionPayload) : {};
+    } catch {
+      json(res, 400, { ok: false, lines: ["Invalid JSON body."] });
+      return true;
+    }
+    try {
+      const projectRoot = resolveOptiDevProjectRoot(context.cwd);
+      json(res, 200, {
+        ok: true,
+        data: await previewOptiDevManifestImpact(projectRoot, context, String(payload.content ?? "")),
+      });
+    } catch (error) {
+      json(res, 400, toErrorResponse(error, "Failed to preview OptiDev manifest impact."));
+    }
+    return true;
+  }
+
+  if (url.pathname === "/api/optidev/memory-graph" && method === "GET") {
+    try {
+      const projectRoot = resolveOptiDevProjectRoot(context.cwd);
+      json(res, 200, {
+        ok: true,
+        data: await buildMemoryGraphPayload(projectRoot),
+      });
+    } catch (error) {
+      json(res, 400, toErrorResponse(error, "Failed to build OptiDev memory graph."));
+    }
+    return true;
+  }
+
+  if (url.pathname === "/api/optidev/plugins" && method === "GET") {
+    try {
+      const projectRoot = resolveOptiDevProjectRoot(context.cwd);
+      json(res, 200, {
+        ok: true,
+        data: await readNativePluginInventory(context, projectRoot),
+      });
+    } catch (error) {
+      json(res, 400, toErrorResponse(error, "Failed to read OptiDev plugin inventory."));
+    }
     return true;
   }
 
@@ -377,7 +479,8 @@ export async function tryHandleOptiDevRequest(
     if (method === "GET") {
       try {
         const data = await readTelegramConfig(context);
-        json(res, 200, { ok: true, lines: [], data });
+        const bridge = await readTelegramBridgeStatus(context);
+        json(res, 200, { ok: true, lines: [], data: { ...data, bridge } });
       } catch (error) {
         json(res, 400, toErrorResponse(error, "Failed to read Telegram config."));
       }
@@ -404,7 +507,8 @@ export async function tryHandleOptiDevRequest(
         botToken: String(payload.botToken ?? ""),
         chatId: String(payload.chatId ?? ""),
       });
-      json(res, 200, { ok: true, lines: ["Telegram settings saved."], data });
+      const bridge = await readTelegramBridgeStatus(context);
+      json(res, 200, { ok: true, lines: ["Telegram settings saved."], data: { ...data, bridge } });
     } catch (error) {
       json(res, 400, toErrorResponse(error, "Failed to save Telegram config."));
     }

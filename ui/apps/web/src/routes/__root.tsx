@@ -22,6 +22,7 @@ import { terminalRunningSubprocessFromEvent } from "../terminalActivity";
 import { onServerConfigUpdated, onServerWelcome } from "../wsNativeApi";
 import { providerQueryKeys } from "../lib/providerReactQuery";
 import { collectActiveTerminalThreadIds } from "../lib/terminalStateCleanup";
+import { debugOptiDev } from "../optidevDebug";
 
 export const Route = createRootRouteWithContext<{
   queryClient: QueryClient;
@@ -155,6 +156,18 @@ function EventRouter() {
       const snapshot = await api.orchestration.getSnapshot();
       if (disposed) return;
       latestSequence = Math.max(latestSequence, snapshot.snapshotSequence);
+      debugOptiDev("root.snapshot.sync", {
+        sequence: snapshot.snapshotSequence,
+        projectCount: snapshot.projects.length,
+        threadCount: snapshot.threads.length,
+        threads: snapshot.threads.map((thread) => ({
+          id: thread.id,
+          title: thread.title,
+          messageCount: thread.messages.length,
+          sessionStatus: thread.session?.status ?? null,
+          worktreePath: thread.worktreePath,
+        })),
+      });
       syncServerReadModel(snapshot);
       const draftThreadIds = Object.keys(
         useComposerDraftStore.getState().draftThreadsByThreadId,
@@ -188,6 +201,11 @@ function EventRouter() {
     void syncSnapshot().catch(() => undefined);
 
     const unsubDomainEvent = api.orchestration.onDomainEvent((event) => {
+      debugOptiDev("root.domain-event", {
+        sequence: event.sequence,
+        type: event.type,
+        aggregateId: event.aggregateId,
+      });
       if (event.sequence <= latestSequence) {
         return;
       }
@@ -211,6 +229,7 @@ function EventRouter() {
         );
     });
     const unsubWelcome = onServerWelcome((payload) => {
+      debugOptiDev("root.server-welcome", payload);
       void (async () => {
         await syncSnapshot();
         if (disposed) {

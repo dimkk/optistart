@@ -9,8 +9,10 @@
 import {
   type CanonicalItemType,
   type CanonicalRequestType,
+  EventId,
   type ProviderEvent,
   type ProviderRuntimeEvent,
+  type ProviderThreadSnapshot,
   type ProviderUserInputAnswers,
   RuntimeItemId,
   RuntimeRequestId,
@@ -40,12 +42,14 @@ import { ServerConfig } from "../../config.ts";
 import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
 
 const PROVIDER = "codex" as const;
+const RESUMED_THREAD_FOLLOW_INTERVAL_MS = 3000;
 
 export interface CodexAdapterLiveOptions {
   readonly manager?: CodexAppServerManager;
   readonly makeManager?: (services?: ServiceMap.ServiceMap<never>) => CodexAppServerManager;
   readonly nativeEventLogPath?: string;
   readonly nativeEventLogger?: EventNdjsonLogger;
+  readonly resumedThreadFollowIntervalMs?: number;
 }
 
 function toMessage(cause: unknown, fallback: string): string {
@@ -107,6 +111,54 @@ function asArray(value: unknown): unknown[] | undefined {
 
 function asNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function threadSnapshotItemKey(turnId: string, item: unknown, index: number): string {
+  const itemId = asString(asObject(item)?.id);
+  return itemId ? `${turnId}:${itemId}` : `${turnId}:index:${index}`;
+}
+
+function collectThreadSnapshotItemKeys(snapshot: ProviderThreadSnapshot): Set<string> {
+  const keys = new Set<string>();
+  for (const turn of snapshot.turns) {
+    for (const [index, item] of turn.items.entries()) {
+      keys.add(threadSnapshotItemKey(turn.id, item, index));
+    }
+  }
+  return keys;
+}
+
+function buildRealtimeItemAddedEvents(input: {
+  snapshot: ProviderThreadSnapshot;
+  knownKeys: Set<string>;
+  threadId: ThreadId;
+}): ProviderEvent[] {
+  const events: ProviderEvent[] = [];
+  for (const turn of input.snapshot.turns) {
+    for (const [index, item] of turn.items.entries()) {
+      const key = threadSnapshotItemKey(turn.id, item, index);
+      if (input.knownKeys.has(key)) {
+        continue;
+      }
+      input.knownKeys.add(key);
+      const itemRecord = asObject(item);
+      const itemId = asString(itemRecord?.id);
+      events.push({
+        id: EventId.makeUnsafe(crypto.randomUUID()),
+        kind: "notification",
+        provider: "codex",
+        threadId: input.threadId,
+        createdAt: new Date().toISOString(),
+        method: "thread/realtime/itemAdded",
+        turnId: TurnId.makeUnsafe(turn.id),
+        ...(itemId ? { itemId: ProviderItemId.makeUnsafe(itemId) } : {}),
+        payload: {
+          item,
+        },
+      });
+    }
+  }
+  return events;
 }
 
 function toTurnStatus(value: unknown): "completed" | "failed" | "cancelled" | "interrupted" {
@@ -1146,7 +1198,7 @@ function mapToRuntimeEvents(
         type: "thread.realtime.item-added",
         ...runtimeEventBase(event, canonicalThreadId),
         payload: {
-          item: event.payload ?? {},
+          item: asObject(event.payload)?.item ?? event.payload ?? {},
         },
       },
     ];
@@ -1282,6 +1334,91 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         }),
     );
 
+    const runtimeEventQueue = yield* Queue.unbounded<ProviderRuntimeEvent>();
+    const followedThreadItemKeys = new Map<string, Set<string>>();
+    const followIntervals = new Map<string, ReturnType<typeof setInterval>>();
+    const resumedThreadFollowIntervalMs =
+      options?.resumedThreadFollowIntervalMs ?? RESUMED_THREAD_FOLLOW_INTERVAL_MS;
+
+    const markKnownItemFromEvent = (event: ProviderEvent): void => {
+      const itemId =
+        event.itemId ??
+        asString(asObject(asObject(event.payload)?.item)?.id)?.trim();
+      if (!itemId) {
+        return;
+      }
+      const knownKeys = followedThreadItemKeys.get(event.threadId) ?? new Set<string>();
+      const turnKey = event.turnId ? `${event.turnId}:${itemId}` : itemId;
+      knownKeys.add(turnKey);
+      followedThreadItemKeys.set(event.threadId, knownKeys);
+    };
+
+    const stopFollowingThread = (threadId: ThreadId): void => {
+      const existing = followIntervals.get(threadId);
+      if (existing) {
+        clearInterval(existing);
+        followIntervals.delete(threadId);
+      }
+      followedThreadItemKeys.delete(threadId);
+    };
+
+    const enqueueProviderEvent = (event: ProviderEvent) =>
+      Effect.gen(function* () {
+        if (nativeEventLogger) {
+          yield* nativeEventLogger.write(event, event.threadId);
+        }
+        markKnownItemFromEvent(event);
+        const runtimeEvents = mapToRuntimeEvents(event, event.threadId);
+        if (runtimeEvents.length === 0) {
+          yield* Effect.logDebug("ignoring unhandled Codex provider event", {
+            method: event.method,
+            threadId: event.threadId,
+            turnId: event.turnId,
+            itemId: event.itemId,
+          });
+          return;
+        }
+        yield* Queue.offerAll(runtimeEventQueue, runtimeEvents);
+      });
+
+    const beginFollowingResumedThread = (threadId: ThreadId): void => {
+      stopFollowingThread(threadId);
+
+      let inFlight = false;
+      const seedAndPoll = async () => {
+        if (inFlight) {
+          return;
+        }
+        inFlight = true;
+        try {
+          const snapshot = (await manager.readThread(threadId)) as ProviderThreadSnapshot;
+          const knownKeys = followedThreadItemKeys.get(threadId);
+          if (!knownKeys) {
+            followedThreadItemKeys.set(threadId, collectThreadSnapshotItemKeys(snapshot));
+            return;
+          }
+          const newEvents = buildRealtimeItemAddedEvents({
+            snapshot,
+            knownKeys,
+            threadId,
+          });
+          for (const event of newEvents) {
+            void Effect.runPromise(enqueueProviderEvent(event)).catch(() => undefined);
+          }
+        } catch {
+          // External-thread follow is best-effort; regular provider runtime events still flow.
+        } finally {
+          inFlight = false;
+        }
+      };
+
+      void seedAndPoll();
+      const intervalId = setInterval(() => {
+        void seedAndPoll();
+      }, resumedThreadFollowIntervalMs);
+      followIntervals.set(threadId, intervalId);
+    };
+
     const startSession: CodexAdapterShape["startSession"] = (input) => {
       if (input.provider !== undefined && input.provider !== PROVIDER) {
         return Effect.fail(
@@ -1314,6 +1451,15 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
             cause,
           }),
       }).pipe(
+        Effect.tap((session) =>
+          Effect.sync(() => {
+            if (input.resumeCursor !== undefined) {
+              beginFollowingResumedThread(session.threadId);
+            } else {
+              stopFollowingThread(session.threadId);
+            }
+          }),
+        ),
         Effect.map((session) => session),
       );
     };
@@ -1436,6 +1582,7 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
 
     const stopSession: CodexAdapterShape["stopSession"] = (threadId) =>
       Effect.sync(() => {
+        stopFollowingThread(threadId);
         manager.stopSession(threadId);
       });
 
@@ -1447,37 +1594,17 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
 
     const stopAll: CodexAdapterShape["stopAll"] = () =>
       Effect.sync(() => {
+        for (const threadId of [...followIntervals.keys()]) {
+          stopFollowingThread(ThreadId.makeUnsafe(threadId));
+        }
         manager.stopAll();
       });
 
-    const runtimeEventQueue = yield* Queue.unbounded<ProviderRuntimeEvent>();
-
     yield* Effect.acquireRelease(
       Effect.gen(function* () {
-        const writeNativeEvent = (event: ProviderEvent) =>
-          Effect.gen(function* () {
-            if (!nativeEventLogger) {
-              return;
-            }
-            yield* nativeEventLogger.write(event, event.threadId);
-          });
-
         const services = yield* Effect.services<never>();
         const listener = (event: ProviderEvent) =>
-          Effect.gen(function* () {
-            yield* writeNativeEvent(event);
-            const runtimeEvents = mapToRuntimeEvents(event, event.threadId);
-            if (runtimeEvents.length === 0) {
-              yield* Effect.logDebug("ignoring unhandled Codex provider event", {
-                method: event.method,
-                threadId: event.threadId,
-                turnId: event.turnId,
-                itemId: event.itemId,
-              });
-              return;
-            }
-            yield* Queue.offerAll(runtimeEventQueue, runtimeEvents);
-          }).pipe(Effect.runPromiseWith(services));
+          enqueueProviderEvent(event).pipe(Effect.runPromiseWith(services));
         manager.on("event", listener);
         return listener;
       }),
@@ -1485,6 +1612,11 @@ const makeCodexAdapter = (options?: CodexAdapterLiveOptions) =>
         Effect.gen(function* () {
           yield* Effect.sync(() => {
             manager.off("event", listener);
+            for (const intervalId of followIntervals.values()) {
+              clearInterval(intervalId);
+            }
+            followIntervals.clear();
+            followedThreadItemKeys.clear();
           });
           yield* Queue.shutdown(runtimeEventQueue);
         }),

@@ -252,7 +252,7 @@ function makeProviderServiceLayer() {
 }
 
 const routing = makeProviderServiceLayer();
-it.effect("ProviderServiceLive keeps persisted resumable sessions on startup", () =>
+it.effect("ProviderServiceLive restores running persisted resumable sessions on startup", () =>
   Effect.gen(function* () {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "t3-provider-service-"));
     const dbPath = path.join(tempDir, "orchestration.sqlite");
@@ -277,9 +277,15 @@ it.effect("ProviderServiceLive keeps persisted resumable sessions on startup", (
       yield* directory.upsert({
         provider: "codex",
         threadId: ThreadId.makeUnsafe("thread-stale"),
+        status: "running",
+        resumeCursor: { threadId: "provider-thread-stale" },
+        runtimePayload: {
+          cwd: "/tmp/provider-service-startup",
+        },
       });
     }).pipe(Effect.provide(directoryLayer));
 
+    codex.startSession.mockClear();
     const providerLayer = makeProviderServiceLive().pipe(
       Layer.provide(Layer.succeed(ProviderAdapterRegistry, registry)),
       Layer.provide(directoryLayer),
@@ -289,6 +295,22 @@ it.effect("ProviderServiceLive keeps persisted resumable sessions on startup", (
     yield* Effect.gen(function* () {
       yield* ProviderService;
     }).pipe(Effect.provide(providerLayer));
+
+    assert.equal(codex.startSession.mock.calls.length, 1);
+    const restoredStartInput = codex.startSession.mock.calls[0]?.[0];
+    assert.equal(typeof restoredStartInput === "object" && restoredStartInput !== null, true);
+    if (restoredStartInput && typeof restoredStartInput === "object") {
+      const startPayload = restoredStartInput as {
+        provider?: string;
+        cwd?: string;
+        resumeCursor?: unknown;
+        threadId?: string;
+      };
+      assert.equal(startPayload.provider, "codex");
+      assert.equal(startPayload.cwd, "/tmp/provider-service-startup");
+      assert.deepEqual(startPayload.resumeCursor, { threadId: "provider-thread-stale" });
+      assert.equal(startPayload.threadId, "thread-stale");
+    }
 
     const persistedProvider = yield* Effect.gen(function* () {
       const directory = yield* ProviderSessionDirectory;
@@ -311,6 +333,56 @@ it.effect("ProviderServiceLive keeps persisted resumable sessions on startup", (
       `;
     }).pipe(Effect.provide(persistenceLayer));
     assert.equal(legacyTableRows.length, 0);
+
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.effect("ProviderServiceLive skips stopped persisted sessions on startup", () =>
+  Effect.gen(function* () {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "t3-provider-service-stopped-"));
+    const dbPath = path.join(tempDir, "orchestration.sqlite");
+
+    const codex = makeFakeCodexAdapter();
+    const registry: typeof ProviderAdapterRegistry.Service = {
+      getByProvider: (provider) =>
+        provider === "codex"
+          ? Effect.succeed(codex.adapter)
+          : Effect.fail(new ProviderUnsupportedError({ provider })),
+      listProviders: () => Effect.succeed(["codex"]),
+    };
+
+    const persistenceLayer = makeSqlitePersistenceLive(dbPath);
+    const runtimeRepositoryLayer = ProviderSessionRuntimeRepositoryLive.pipe(
+      Layer.provide(persistenceLayer),
+    );
+    const directoryLayer = ProviderSessionDirectoryLive.pipe(Layer.provide(runtimeRepositoryLayer));
+
+    yield* Effect.gen(function* () {
+      const directory = yield* ProviderSessionDirectory;
+      yield* directory.upsert({
+        provider: "codex",
+        threadId: ThreadId.makeUnsafe("thread-stopped"),
+        status: "stopped",
+        resumeCursor: { threadId: "provider-thread-stopped" },
+        runtimePayload: {
+          cwd: "/tmp/provider-service-stopped",
+        },
+      });
+    }).pipe(Effect.provide(directoryLayer));
+
+    codex.startSession.mockClear();
+    const providerLayer = makeProviderServiceLive().pipe(
+      Layer.provide(Layer.succeed(ProviderAdapterRegistry, registry)),
+      Layer.provide(directoryLayer),
+      Layer.provide(AnalyticsService.layerTest),
+    );
+
+    yield* Effect.gen(function* () {
+      yield* ProviderService;
+    }).pipe(Effect.provide(providerLayer));
+
+    assert.equal(codex.startSession.mock.calls.length, 0);
 
     fs.rmSync(tempDir, { recursive: true, force: true });
   }).pipe(Effect.provide(NodeServices.layer)),
@@ -440,6 +512,10 @@ routing.layer("ProviderServiceLive routing", (it) => {
         attachments: [],
       });
       assert.equal(routing.codex.sendTurn.mock.calls.length, 1);
+
+      const threadSnapshot = yield* provider.readThread(session.threadId);
+      assert.equal(threadSnapshot.threadId, session.threadId);
+      assert.equal(routing.codex.readThread.mock.calls.length, 1);
 
       yield* provider.interruptTurn({ threadId: session.threadId });
       assert.deepEqual(routing.codex.interruptTurn.mock.calls, [[session.threadId, undefined]]);

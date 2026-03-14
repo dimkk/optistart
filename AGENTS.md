@@ -90,10 +90,28 @@ They define:
 
 If matrices and a feature doc disagree, matrices win.
 
+Don't invent wheel rule:
+- before implementing any new behavior, first verify whether the needed mechanism already exists in 3rd party packages
+- default assumption should be reuse, extension, or correct wiring of an existing 3rd party path, not a parallel project-specific implementation
+- only introduce a new mechanism after explicitly ruling out the existing 3rd party path
+
+List of 3rd party paths:
+- 
+-
+
 Reality-check rule:
 - do not silently narrow explicit user requirements such as "all", "open", "running", "latest", or "live" into a persisted subset without saying so
 - when implementation depends on a runtime source of truth, verify against the real runtime path and not only seeded/unit fixtures before considering the task done
 - if a requirement can reasonably map to more than one source of truth, ask the user or explicitly call out the assumption before shipping
+
+Feedback-first rule:
+- user actions must receive immediate visible feedback whenever feasible: acknowledgement, loading, success, or error
+- avoid silent waits after a click, toggle, navigation, or submit; if the real work may take time, surface that state in the UI right away
+
+User-state-is-sacred rule:
+- treat user-modified application state as durable by default
+- when the user expands, collapses, selects, pins, toggles, or reconfigures something, preserve and restore that state across reloads or restarts whenever feasible
+- do not reset user state opportunistically just because it is convenient for implementation
 
 ## Atomic Feature Lifecycle
 
@@ -115,14 +133,6 @@ Lifecycle:
 
 Feature docs are now selective, not mandatory for every small change.
 
-Create a feature doc when the change affects:
-- plugin API
-- manifest schema
-- runner contract
-- storage schema
-- workspace layout contract
-- external integration contract
-- persistent repository process contract
 
 Feature doc location:
 ```text
@@ -150,14 +160,6 @@ Every implemented feature must map to tests in:
 - e2e
 
 Not every feature needs all three at the same weight, but risky runtime features must have strong e2e coverage.
-
-Mandatory e2e emphasis for:
-- Telegram / external messenger flows
-- workspace startup / restore
-- plugin lifecycle behavior
-- runner bootstrap behavior
-- manifest/session restore behavior
-- report ingestion / memory continuity
 
 ## Reports
 
@@ -189,22 +191,6 @@ Agents:
 MCP configs:
 - live in `.agents/mcp/`
 
-## OptiDev Assumptions
-
-Assume the repository is used inside OptiDev:
-```text
-optid start <project>
-```
-
-Default workspace mental model:
-```text
-chat
-editor/code
-tests
-logs
-```
-
-Agents should behave as if they work in a coordinated runtime, not in a single isolated shell.
 
 ## Parallel Work
 
@@ -237,3 +223,10 @@ docs/releases/
 ```
 
 Release tags and promotions happen only when the user explicitly moves the release process forward.
+
+## other
+
+- code files - less then 100 lines
+- no `// TODO` comments
+- no `// FIXME` comments
+- use functional approach where possible instead of OOP

@@ -4,9 +4,16 @@ import path from "node:path";
 import os from "node:os";
 import { promisify } from "node:util";
 
-import type { OptiDevActionResponse, OptiDevRouteContext } from "./optidevContract";
+import type {
+  OptiDevActionPayload,
+  OptiDevActionResponse,
+  OptiDevPluginInventoryEntryPayload,
+  OptiDevRouteContext,
+  OptiDevTelegramBridgeStatusPayload,
+} from "./optidevContract";
 import { loadGlobalConfig, resolveHomeDir } from "./optidevNative";
 import { exists, loadMapping, writeYaml } from "./optidevPersistence";
+import { requestOptiDevTelegramBridgeReload } from "./optidevTelegramBridge";
 
 const execFileAsync = promisify(execFile);
 
@@ -15,6 +22,16 @@ interface TelegramConfig {
   token: string;
   chat_id: number | null;
   updated_at: string;
+  target_thread_id: string | null;
+  target_updated_at: string | null;
+}
+
+export interface OptiDevPluginInventoryEntry {
+  id: "advice" | "telegram" | "skills" | "agents";
+  label: string;
+  scope: "native";
+  status: string;
+  detail: string;
 }
 
 function maskToken(token: string): string {
@@ -382,7 +399,7 @@ async function telegramEventsPath(context: OptiDevRouteContext): Promise<string>
 async function loadTelegramConfig(context: OptiDevRouteContext): Promise<TelegramConfig> {
   const filePath = await telegramConfigPath(context);
   if (!(await exists(filePath))) {
-    return { enabled: false, token: "", chat_id: null, updated_at: "" };
+    return { enabled: false, token: "", chat_id: null, updated_at: "", target_thread_id: null, target_updated_at: null };
   }
   try {
     const data = await readJson<Record<string, unknown>>(filePath);
@@ -391,14 +408,84 @@ async function loadTelegramConfig(context: OptiDevRouteContext): Promise<Telegra
       token: typeof data.token === "string" ? data.token : "",
       chat_id: typeof data.chat_id === "number" ? data.chat_id : null,
       updated_at: typeof data.updated_at === "string" ? data.updated_at : "",
+      target_thread_id: typeof data.target_thread_id === "string" ? data.target_thread_id : null,
+      target_updated_at: typeof data.target_updated_at === "string" ? data.target_updated_at : null,
     };
   } catch {
-    return { enabled: false, token: "", chat_id: null, updated_at: "" };
+    return { enabled: false, token: "", chat_id: null, updated_at: "", target_thread_id: null, target_updated_at: null };
   }
 }
 
 async function saveTelegramConfig(context: OptiDevRouteContext, config: TelegramConfig): Promise<void> {
   await writeJson(await telegramConfigPath(context), config);
+  requestOptiDevTelegramBridgeReload();
+}
+
+export async function readTelegramBridgeStatus(
+  context: OptiDevRouteContext,
+): Promise<OptiDevTelegramBridgeStatusPayload> {
+  const config = await loadTelegramConfig(context);
+  const tokenHint = maskToken(config.token);
+  const chatId = config.chat_id !== null ? String(config.chat_id) : "";
+  if (!config.enabled) {
+    return {
+      enabled: false,
+      chatId,
+      tokenHint,
+      targetThreadId: config.target_thread_id,
+      targetUpdatedAt: config.target_updated_at,
+      statusLine:
+        config.chat_id !== null
+          ? `Telegram bridge is disabled. Saved chat id: ${config.chat_id}.`
+          : "Telegram bridge is disabled.",
+    };
+  }
+
+  const targetLabel = config.target_thread_id ? ` Selected session: ${config.target_thread_id}.` : "";
+  return {
+    enabled: true,
+    chatId,
+    tokenHint,
+    targetThreadId: config.target_thread_id,
+    targetUpdatedAt: config.target_updated_at,
+    statusLine: `Telegram bridge is enabled for chat ${config.chat_id} (token ${tokenHint}).${targetLabel}`,
+  };
+}
+
+export async function readPluginInventory(
+  context: OptiDevRouteContext,
+): Promise<OptiDevPluginInventoryEntry[]> {
+  const telegram = await readTelegramBridgeStatus(context);
+  return [
+    {
+      id: "advice",
+      label: "Repo Advice",
+      scope: "native",
+      status: "available",
+      detail: "Builds a repository summary and bootstrap prompt from the current project.",
+    },
+    {
+      id: "telegram",
+      label: "Telegram Bridge",
+      scope: "native",
+      status: telegram.enabled ? "enabled" : "disabled",
+      detail: telegram.statusLine,
+    },
+    {
+      id: "skills",
+      label: "Skills Catalog",
+      scope: "native",
+      status: "available",
+      detail: "Searches and installs skills into the repo-local .agents/skills path.",
+    },
+    {
+      id: "agents",
+      label: "Agents Catalog",
+      scope: "native",
+      status: "available",
+      detail: "Searches and installs agent specs into the repo-local .agents/agents path.",
+    },
+  ];
 }
 
 async function appendTelegramEvent(context: OptiDevRouteContext, event: Record<string, unknown>): Promise<void> {
@@ -428,29 +515,17 @@ async function saveGlobalTelegramDefaults(context: OptiDevRouteContext, token: s
 }
 
 async function telegramStatus(context: OptiDevRouteContext): Promise<OptiDevActionResponse> {
-  const config = await loadTelegramConfig(context);
-  const active = await readActiveSession(context);
-  const activeProject = typeof active?.project === "string" && active.status === "running" ? active.project : null;
-  if (!config.enabled) {
-    if (config.chat_id !== null) {
-      return {
-        ok: true,
-        lines: [
-          `Telegram bridge is disabled. Saved chat id: ${config.chat_id}. Run \`optid telegram start --token <token> --chat-id <chat-id>\` to enable it.`,
-        ],
-      };
-    }
-    return { ok: true, lines: ["Telegram bridge is disabled."] };
+  const status = await readTelegramBridgeStatus(context);
+  if (!status.enabled && status.chatId) {
+    return {
+      ok: true,
+      lines: [
+        `${status.statusLine} Run \`optid telegram start --token <token> --chat-id <chat-id>\` to enable it.`,
+      ],
+      data: status,
+    };
   }
-  const tokenHint = maskToken(config.token);
-  return {
-    ok: true,
-    lines: [
-      activeProject
-        ? `Telegram bridge is enabled for chat ${config.chat_id} (token ${tokenHint}). Active workspace: ${activeProject}.`
-        : `Telegram bridge is enabled for chat ${config.chat_id} (token ${tokenHint}). It will attach when a workspace starts.`,
-    ],
-  };
+  return { ok: true, lines: [status.statusLine], data: status };
 }
 
 function parseTelegramFlags(args: string[]): { token?: string; chat_id?: string } | null {
@@ -467,7 +542,11 @@ function parseTelegramFlags(args: string[]): { token?: string; chat_id?: string 
   return out;
 }
 
-async function telegramStart(context: OptiDevRouteContext, args: string[]): Promise<OptiDevActionResponse> {
+async function telegramStart(
+  context: OptiDevRouteContext,
+  args: string[],
+  payload?: Pick<OptiDevActionPayload, "threadId">,
+): Promise<OptiDevActionResponse> {
   const current = await loadTelegramConfig(context);
   const parsed = parseTelegramFlags(args);
   if (parsed === null) {
@@ -497,18 +576,25 @@ async function telegramStart(context: OptiDevRouteContext, args: string[]): Prom
   if (parsed.token || parsed.chat_id) {
     await saveGlobalTelegramDefaults(context, token, chatId);
   }
+  const explicitThreadId = payload?.threadId?.trim() ? payload.threadId.trim() : null;
+  const updatedAt = new Date().toISOString();
   await saveTelegramConfig(context, {
     enabled: true,
     token,
     chat_id: chatId,
-    updated_at: new Date().toISOString(),
+    updated_at: updatedAt,
+    target_thread_id: explicitThreadId,
+    target_updated_at: explicitThreadId ? updatedAt : null,
   });
+  const targetLine = explicitThreadId
+    ? `Telegram is now pinned to session ${explicitThreadId}.`
+    : "Telegram will attach to the best available active session until one is explicitly selected.";
   return {
     ok: true,
     lines: [
       `Telegram bridge enabled for chat ${chatId}.`,
-      "The active workspace chat pane will mirror terminal traffic to Telegram.",
-      "Telegram messages will be injected into the active chat pane.",
+      targetLine,
+      "Telegram messages will be injected into the selected chat session.",
     ],
   };
 }
@@ -523,6 +609,8 @@ async function telegramStop(context: OptiDevRouteContext): Promise<OptiDevAction
     token: current.token,
     chat_id: current.chat_id,
     updated_at: new Date().toISOString(),
+    target_thread_id: current.target_thread_id,
+    target_updated_at: current.target_updated_at,
   });
   return { ok: true, lines: ["Telegram bridge disabled."] };
 }
@@ -532,6 +620,7 @@ export async function recordNativeWorkspaceStarted(
   event: { project: string; status: string },
 ): Promise<void> {
   await appendTelegramEvent(context, { type: "workspace_start", context: event });
+  requestOptiDevTelegramBridgeReload();
 }
 
 export async function recordNativeWorkspaceStopped(
@@ -539,6 +628,59 @@ export async function recordNativeWorkspaceStopped(
   event: { project: string; status: string },
 ): Promise<void> {
   await appendTelegramEvent(context, { type: "workspace_stop", context: event });
+  requestOptiDevTelegramBridgeReload();
+}
+
+export async function readNativePluginInventory(
+  context: OptiDevRouteContext,
+  cwd: string,
+): Promise<OptiDevPluginInventoryEntryPayload[]> {
+  const telegram = await readTelegramBridgeStatus(context);
+  const advice = await buildNativeRepoAdvice(path.resolve(cwd));
+  return [
+    {
+      id: "advice",
+      title: "Advice",
+      category: "analysis",
+      enabled: true,
+      summary: "Repository bootstrap analysis that prepares a concise repo summary for the runner.",
+      details: advice.repo_summary.split("\n").filter((line) => line.trim().length > 0),
+    },
+    {
+      id: "telegram",
+      title: "Telegram",
+      category: "integration",
+      enabled: telegram.enabled,
+      summary: telegram.statusLine,
+      details: [
+        `chat: ${telegram.chatId || "unset"}`,
+        `token: ${telegram.tokenHint || "unset"}`,
+        `target session: ${telegram.targetThreadId ?? "auto"}`,
+      ],
+    },
+    {
+      id: "skills",
+      title: "Skills",
+      category: "catalog",
+      enabled: true,
+      summary: "Searches for installable skills and writes selected ones into .agents/skills.",
+      details: [
+        "command: optid skills search <query...>",
+        "command: optid skills install <owner/repo@skill>",
+      ],
+    },
+    {
+      id: "agents",
+      title: "Agents",
+      category: "catalog",
+      enabled: true,
+      summary: "Searches and installs agent definitions into .agents/agents.",
+      details: [
+        "command: optid agents search <query...>",
+        "command: optid agents install <slug|url>",
+      ],
+    },
+  ];
 }
 
 export function supportsNativePluginCommand(command: string, args: string[]): boolean {
@@ -550,6 +692,7 @@ export async function nativePluginAction(
   command: string,
   args: string[],
   cwd: string,
+  payload?: Pick<OptiDevActionPayload, "threadId">,
 ): Promise<OptiDevActionResponse> {
   if (command === "advice") {
     const advice = await buildNativeRepoAdvice(path.resolve(cwd));
@@ -564,7 +707,7 @@ export async function nativePluginAction(
       return telegramStatus(context);
     }
     if (subcommand === "start") {
-      return telegramStart(context, args.slice(1));
+      return telegramStart(context, args.slice(1), payload);
     }
     if (subcommand === "stop") {
       return telegramStop(context);

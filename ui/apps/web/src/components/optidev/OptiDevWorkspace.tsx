@@ -1,32 +1,33 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  BotIcon,
-  BookMarkedIcon,
-  ChevronRightIcon,
   FileCode2Icon,
   FileIcon,
   FileImageIcon,
   FolderIcon,
-  FolderOpenIcon,
   RefreshCwIcon,
   SaveIcon,
   Settings2Icon,
   WrenchIcon,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
+import { useDeferredValue, useEffect, useState } from "react";
 
+import ChatMarkdown from "../ChatMarkdown";
 import { Button } from "../ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../ui/card";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
+import { SidebarTrigger } from "../ui/sidebar";
 import { Spinner } from "../ui/spinner";
 import { Textarea } from "../ui/textarea";
 import { CodeBlock } from "./CodeBlock";
+import {
+  readStoredOptiDevTab,
+  setStoredOptiDevTab,
+  subscribeOptiDevTab,
+  type OptiDevWorkspaceTab,
+} from "./optidevTabs";
 
 type FileScope = "repo" | "agents" | "skills";
-type WorkspaceTab = "files" | "optidev" | "plugins";
 type MarkdownMode = "rendered" | "source";
 
 interface OptiDevProjectRecord {
@@ -89,14 +90,76 @@ interface FilePayload {
   editable: boolean;
 }
 
-interface TelegramConfigPayload {
-  botToken: string;
-  chatId: string;
+interface ManifestPayload {
+  path: string;
+  content: string;
+  manifest: {
+    project: string;
+    workspace: {
+      active_task: string;
+      branch: string;
+      head_commit: string;
+      mux: string;
+    };
+    agents: Array<{ name: string; runner: string }>;
+    layout: Array<{ name: string; pane: string }>;
+    services: Array<{ name: string; command: string }>;
+    tests: { command: string };
+    logs: { command: string };
+    context: {
+      agents_dir: string;
+      skills_dir: string;
+      mcp_dir: string;
+    };
+  };
+  impacts: Array<{
+    field: string;
+    before: string;
+    after: string;
+    effect: string;
+  }>;
+  runtimeNotes: string[];
+}
+
+interface MemoryGraphPayload {
+  project: string;
+  focusNodeId: string | null;
+  nodes: Array<{
+    id: string;
+    kind: "project" | "release" | "task" | "feature" | "decision" | "open_loop";
+    label: string;
+    status: string | null;
+    group: string;
+    highlight: boolean;
+  }>;
+  edges: Array<{
+    source: string;
+    target: string;
+    kind: string;
+  }>;
+  stats: {
+    features: number;
+    tasks: number;
+    releases: number;
+    decisions: number;
+    openLoops: number;
+  };
+  implementationNotes: string[];
+}
+
+interface PluginInventoryEntry {
+  id: string;
+  title: string;
+  category: "analysis" | "integration" | "catalog";
+  enabled: boolean;
+  summary: string;
+  details: string[];
 }
 
 interface ActionResponse {
   ok: boolean;
   lines: string[];
+  data?: unknown;
 }
 
 async function readJson<T>(input: string, init?: RequestInit): Promise<T> {
@@ -114,10 +177,7 @@ async function readJson<T>(input: string, init?: RequestInit): Promise<T> {
 }
 
 async function fetchState(): Promise<StateEnvelope> {
-  const body = await readJson<{
-    lines?: string[];
-    state: OptiDevState;
-  }>("/api/optidev/state");
+  const body = await readJson<{ lines?: string[]; state: OptiDevState }>("/api/optidev/state");
   return {
     warnings: body.lines ?? [],
     state: body.state,
@@ -144,25 +204,36 @@ async function fetchFile(scope: FileScope, currentPath: string): Promise<FilePay
   return body.data;
 }
 
-async function savePluginFile(scope: "agents" | "skills", filePath: string, content: string) {
-  return readJson<{ lines: string[]; data: FilePayload }>("/api/optidev/fs/write", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ scope, path: filePath, content }),
-  });
-}
-
-async function fetchTelegramConfig(): Promise<TelegramConfigPayload> {
-  const body = await readJson<{ data: TelegramConfigPayload }>("/api/optidev/telegram-config");
+async function fetchManifest(): Promise<ManifestPayload> {
+  const body = await readJson<{ data: ManifestPayload }>("/api/optidev/manifest");
   return body.data;
 }
 
-async function saveTelegramConfig(payload: TelegramConfigPayload) {
-  return readJson<{ lines: string[]; data: TelegramConfigPayload }>("/api/optidev/telegram-config", {
+async function previewManifest(content: string): Promise<ManifestPayload> {
+  const body = await readJson<{ data: ManifestPayload }>("/api/optidev/manifest/impact", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ content }),
   });
+  return body.data;
+}
+
+async function saveManifest(content: string): Promise<{ lines: string[]; data: ManifestPayload }> {
+  return readJson<{ lines: string[]; data: ManifestPayload }>("/api/optidev/manifest", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content }),
+  });
+}
+
+async function fetchMemoryGraph(): Promise<MemoryGraphPayload> {
+  const body = await readJson<{ data: MemoryGraphPayload }>("/api/optidev/memory-graph");
+  return body.data;
+}
+
+async function fetchPluginInventory(): Promise<PluginInventoryEntry[]> {
+  const body = await readJson<{ data: PluginInventoryEntry[] }>("/api/optidev/plugins");
+  return body.data;
 }
 
 function pathSegments(currentPath: string): string[] {
@@ -193,11 +264,11 @@ function fileRawUrl(scope: FileScope, currentPath: string): string {
 }
 
 function SectionTabs(props: {
-  activeTab: WorkspaceTab;
-  onSelect: (tab: WorkspaceTab) => void;
+  activeTab: OptiDevWorkspaceTab;
+  onSelect: (tab: OptiDevWorkspaceTab) => void;
 }) {
-  const items: Array<{ id: WorkspaceTab; label: string; icon: typeof FolderOpenIcon }> = [
-    { id: "files", label: "Files", icon: FolderOpenIcon },
+  const items: Array<{ id: OptiDevWorkspaceTab; label: string; icon: typeof Settings2Icon }> = [
+    { id: "files", label: "Files", icon: FileCode2Icon },
     { id: "optidev", label: "OptiDev", icon: Settings2Icon },
     { id: "plugins", label: "Plugins", icon: WrenchIcon },
   ];
@@ -271,16 +342,14 @@ function DirectoryBrowser(props: {
           {pathSegments(props.currentPath).map((segment, index, all) => {
             const nextPath = all.slice(0, index + 1).join("/");
             return (
-              <div key={nextPath} className="flex items-center gap-1">
-                <ChevronRightIcon className="size-3" />
-                <button
-                  type="button"
-                  className="rounded px-1.5 py-0.5 hover:bg-accent hover:text-foreground"
-                  onClick={() => props.onOpenDirectory(nextPath)}
-                >
-                  {segment}
-                </button>
-              </div>
+              <button
+                key={nextPath}
+                type="button"
+                className="rounded px-1.5 py-0.5 hover:bg-accent hover:text-foreground"
+                onClick={() => props.onOpenDirectory(nextPath)}
+              >
+                / {segment}
+              </button>
             );
           })}
         </div>
@@ -334,6 +403,7 @@ function DirectoryBrowser(props: {
 function FileViewer(props: {
   scope: FileScope;
   selectedPath: string;
+  repoRoot: string;
   markdownMode: MarkdownMode;
   onMarkdownModeChange: (mode: MarkdownMode) => void;
 }) {
@@ -407,11 +477,9 @@ function FileViewer(props: {
             src={fileRawUrl(props.scope, props.selectedPath)}
           />
         ) : fileQuery.data?.kind === "markdown" && props.markdownMode === "rendered" ? (
-          <article className="prose prose-sm max-w-none prose-headings:tracking-tight dark:prose-invert">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-              {fileQuery.data.content ?? ""}
-            </ReactMarkdown>
-          </article>
+          <div className="rounded-xl border border-border bg-muted/10 p-4">
+            <ChatMarkdown cwd={props.repoRoot} text={fileQuery.data.content ?? ""} />
+          </div>
         ) : fileQuery.data?.kind === "code" ? (
           <CodeBlock code={fileQuery.data.content ?? ""} language={fileQuery.data.language} />
         ) : fileQuery.data?.kind === "binary" ? (
@@ -426,26 +494,46 @@ function FileViewer(props: {
   );
 }
 
+function ManifestSummary(props: { payload: ManifestPayload | undefined }) {
+  const manifest = props.payload?.manifest;
+  if (!manifest) {
+    return null;
+  }
+
+  const rows = [
+    ["Project", manifest.project],
+    ["Branch", manifest.workspace.branch || "n/a"],
+    ["Active task", manifest.workspace.active_task || "not pinned"],
+    ["Agents", String(manifest.agents.length)],
+    ["Services", String(manifest.services.length)],
+    ["Layout", manifest.layout.map((item) => item.name).join(", ") || "default"],
+  ];
+
+  return (
+    <div className="grid gap-3 sm:grid-cols-2">
+      {rows.map(([label, value]) => (
+        <div key={label} className="rounded-xl border border-border bg-muted/20 px-3 py-3">
+          <div className="text-[11px] font-semibold tracking-[0.12em] text-muted-foreground uppercase">{label}</div>
+          <div className="mt-1 text-sm font-medium">{value}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function OptiDevWorkspace() {
   const queryClient = useQueryClient();
-  const [activeTab, setActiveTab] = useState<WorkspaceTab>("files");
-  const [target, setTarget] = useState(".");
+  const [activeTab, setActiveTab] = useState<OptiDevWorkspaceTab>(() => readStoredOptiDevTab());
+  const [repoPath, setRepoPath] = useState("");
+  const [selectedRepoFile, setSelectedRepoFile] = useState("");
+  const [markdownMode, setMarkdownMode] = useState<MarkdownMode>("rendered");
+  const [manifestDraft, setManifestDraft] = useState("");
   const [cloneName, setCloneName] = useState("feature-sandbox");
   const [memoryKind, setMemoryKind] = useState("feature");
   const [memoryIdentifier, setMemoryIdentifier] = useState("runtime-ts-002");
-  const [output, setOutput] = useState("No OptiDev action yet.");
-  const [repoPath, setRepoPath] = useState("");
-  const [selectedRepoFile, setSelectedRepoFile] = useState("");
-  const [pluginScope, setPluginScope] = useState<"agents" | "skills">("agents");
-  const [pluginPath, setPluginPath] = useState("");
-  const [selectedPluginFile, setSelectedPluginFile] = useState("");
-  const [pluginDraftPath, setPluginDraftPath] = useState("new-entry.md");
-  const [pluginEditorContent, setPluginEditorContent] = useState("");
-  const [markdownMode, setMarkdownMode] = useState<MarkdownMode>("rendered");
-  const [telegramForm, setTelegramForm] = useState<TelegramConfigPayload>({
-    botToken: "",
-    chatId: "",
-  });
+  const [output, setOutput] = useState("Manifest-first workspace ready.");
+
+  const deferredManifestDraft = useDeferredValue(manifestDraft);
 
   const stateQuery = useQuery({
     queryKey: ["optidev", "state"],
@@ -453,40 +541,40 @@ export function OptiDevWorkspace() {
     refetchInterval: 15_000,
   });
 
-  const pluginFileQuery = useQuery({
-    enabled: selectedPluginFile.length > 0,
-    queryKey: ["optidev", "file", pluginScope, selectedPluginFile],
-    queryFn: () => fetchFile(pluginScope, selectedPluginFile),
+  const manifestQuery = useQuery({
+    queryKey: ["optidev", "manifest"],
+    queryFn: fetchManifest,
   });
 
-  const telegramQuery = useQuery({
-    queryKey: ["optidev", "telegram-config"],
-    queryFn: fetchTelegramConfig,
+  const manifestImpactQuery = useQuery({
+    enabled:
+      deferredManifestDraft.trim().length > 0 &&
+      manifestQuery.data !== undefined &&
+      deferredManifestDraft !== manifestQuery.data.content,
+    queryKey: ["optidev", "manifest-impact", deferredManifestDraft],
+    queryFn: () => previewManifest(deferredManifestDraft),
   });
 
-  useEffect(() => {
-    if (pluginFileQuery.data?.content != null) {
-      setPluginEditorContent(pluginFileQuery.data.content);
-    }
-  }, [pluginFileQuery.data?.path, pluginFileQuery.data?.content]);
+  const memoryGraphQuery = useQuery({
+    queryKey: ["optidev", "memory-graph"],
+    queryFn: fetchMemoryGraph,
+  });
+
+  const pluginsQuery = useQuery({
+    queryKey: ["optidev", "plugins"],
+    queryFn: fetchPluginInventory,
+  });
+
+  useEffect(() => subscribeOptiDevTab(setActiveTab), []);
 
   useEffect(() => {
-    if (telegramQuery.data) {
-      setTelegramForm(telegramQuery.data);
+    if (manifestQuery.data) {
+      setManifestDraft(manifestQuery.data.content);
     }
-  }, [telegramQuery.data]);
-
-  useEffect(() => {
-    setPluginPath("");
-    setSelectedPluginFile("");
-    setPluginEditorContent("");
-  }, [pluginScope]);
+  }, [manifestQuery.data?.content]);
 
   const refreshAll = async () => {
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ["optidev"] }),
-      queryClient.invalidateQueries({ queryKey: ["optidev", "telegram-config"] }),
-    ]);
+    await queryClient.invalidateQueries({ queryKey: ["optidev"] });
   };
 
   const actionMutation = useMutation({
@@ -500,66 +588,36 @@ export function OptiDevWorkspace() {
     },
   });
 
-  const savePluginMutation = useMutation({
-    mutationFn: (input: { scope: "agents" | "skills"; path: string; content: string }) =>
-      savePluginFile(input.scope, input.path, input.content),
-    onSuccess: async (result, variables) => {
-      setOutput(result.lines.join("\n"));
-      setSelectedPluginFile(variables.path);
-      setPluginPath(parentPath(variables.path));
-      await queryClient.invalidateQueries({ queryKey: ["optidev", "dir", variables.scope] });
-      await queryClient.invalidateQueries({ queryKey: ["optidev", "file", variables.scope, variables.path] });
-    },
-    onError: (error) => {
-      setOutput(error instanceof Error ? error.message : "Failed to save plugin file.");
-    },
-  });
-
-  const saveTelegramMutation = useMutation({
-    mutationFn: saveTelegramConfig,
+  const saveManifestMutation = useMutation({
+    mutationFn: saveManifest,
     onSuccess: async (result) => {
-      setTelegramForm(result.data);
+      setManifestDraft(result.data.content);
       setOutput(result.lines.join("\n"));
-      await queryClient.invalidateQueries({ queryKey: ["optidev", "telegram-config"] });
+      await refreshAll();
     },
     onError: (error) => {
-      setOutput(error instanceof Error ? error.message : "Failed to save Telegram settings.");
+      setOutput(error instanceof Error ? error.message : "Failed to save manifest.");
     },
   });
 
-  const resolvedTarget = target.trim() || ".";
   const state = stateQuery.data?.state;
-
-  const sessionRows = useMemo(
-    () =>
-      state
-        ? [
-            ["Project", state.session.project ?? "No active session"],
-            ["Runner", state.session.runner ?? "n/a"],
-            ["Mux", state.session.muxBackend ?? "n/a"],
-            ["Mode", state.session.mode ?? "n/a"],
-            ["Branch", state.session.branch ?? "n/a"],
-            ["Task", state.session.activeTask ?? "n/a"],
-            ["Hooks", `${state.session.hooksRunning}/${state.session.hooksTotal}`],
-            ["Agents", String(state.session.agentsCount)],
-            ["Manifest", state.session.manifestValid ? "valid" : "missing or invalid"],
-          ]
-        : [],
-    [state],
-  );
+  const manifestPreview = manifestImpactQuery.data ?? manifestQuery.data;
+  const resolvedTarget = state?.session.project ?? ".";
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background text-foreground">
       <div className="flex shrink-0 flex-col gap-4 border-b border-border px-5 py-4">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <p className="text-xs font-semibold tracking-[0.2em] text-muted-foreground uppercase">
-              Embedded In T3 Code
-            </p>
+            <div className="flex items-center gap-2">
+              <SidebarTrigger className="shrink-0 md:hidden" />
+              <p className="text-xs font-semibold tracking-[0.2em] text-muted-foreground uppercase">
+                Manifest First
+              </p>
+            </div>
             <h1 className="mt-1 text-2xl font-semibold tracking-tight">OptiDev Workspace</h1>
             <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
-              Remove repo friction from one place: inspect files, restore or steer the current session,
-              and edit agents, skills, plus Telegram settings without leaving the T3 shell.
+              The manifest is the contract. Runtime controls simply apply that contract to the live workspace.
             </p>
           </div>
           <Button variant="outline" onClick={() => void refreshAll()}>
@@ -567,7 +625,13 @@ export function OptiDevWorkspace() {
             Refresh
           </Button>
         </div>
-        <SectionTabs activeTab={activeTab} onSelect={setActiveTab} />
+        <SectionTabs
+          activeTab={activeTab}
+          onSelect={(tab) => {
+            setStoredOptiDevTab(tab);
+            setActiveTab(tab);
+          }}
+        />
         {stateQuery.data?.warnings.length ? (
           <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-950 dark:text-amber-100">
             {stateQuery.data.warnings.join(" ")}
@@ -599,7 +663,7 @@ export function OptiDevWorkspace() {
               currentPath={repoPath}
               selectedPath={selectedRepoFile}
               title="Repository Files"
-              description={`Browse ${state?.repoRoot ?? "the current repository"} without leaving T3.`}
+              description={`Browse ${state?.repoRoot ?? "the current repository"} with the shared t3 markdown renderer.`}
               onOpenDirectory={(nextPath) => {
                 setRepoPath(nextPath);
                 setSelectedRepoFile("");
@@ -609,54 +673,131 @@ export function OptiDevWorkspace() {
             <FileViewer
               scope="repo"
               selectedPath={selectedRepoFile}
+              repoRoot={state?.repoRoot ?? ""}
               markdownMode={markdownMode}
               onMarkdownModeChange={setMarkdownMode}
             />
           </div>
         ) : activeTab === "optidev" ? (
-          <div className="grid h-full min-h-0 gap-4 xl:grid-cols-[420px_minmax(0,1fr)]">
+          <div className="grid h-full min-h-0 gap-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(360px,0.8fr)]">
             <div className="flex min-h-0 flex-col gap-4 overflow-y-auto pr-1">
+              <Card className="min-h-0 overflow-hidden">
+                <CardHeader>
+                  <CardTitle>Workspace Manifest</CardTitle>
+                  <CardDescription data-testid="optidev-manifest-path">
+                    {manifestQuery.data?.path ?? ".optidev/workspace.yaml"}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <ManifestSummary payload={manifestPreview} />
+                  <div className="space-y-2">
+                    <Label htmlFor="optidev-manifest-editor">Manifest YAML</Label>
+                    <Textarea
+                      id="optidev-manifest-editor"
+                      data-testid="optidev-manifest-editor"
+                      className="min-h-[340px] font-mono text-sm"
+                      value={manifestDraft}
+                      onChange={(event) => setManifestDraft(event.currentTarget.value)}
+                    />
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <Button
+                      data-testid="optidev-manifest-save"
+                      disabled={saveManifestMutation.isPending || manifestDraft.trim().length === 0}
+                      onClick={() => saveManifestMutation.mutate(manifestDraft)}
+                    >
+                      <SaveIcon className="mr-2 size-4" />
+                      {saveManifestMutation.isPending ? "Saving..." : "Save manifest"}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={() => {
+                        if (manifestQuery.data) {
+                          setManifestDraft(manifestQuery.data.content);
+                        }
+                      }}
+                    >
+                      Revert draft
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+
               <Card>
                 <CardHeader>
-                  <CardTitle>Session</CardTitle>
-                  <CardDescription>Current restore/runtime state from the native OptiDev backend.</CardDescription>
+                  <CardTitle>What Changes If You Edit It</CardTitle>
+                  <CardDescription>
+                    Draft impact is computed from the current saved manifest and the live session contract.
+                  </CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-3">
-                  {sessionRows.map(([label, value]) => (
-                    <div key={label} className="flex items-center justify-between gap-4 text-sm">
-                      <span className="text-muted-foreground">{label}</span>
-                      <span className="text-right font-medium">{value}</span>
-                    </div>
-                  ))}
-                  {state?.session.headCommit ? (
-                    <div className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-                      Head commit: {state.session.headCommit}
+                  {manifestImpactQuery.isFetching ? (
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <Spinner className="size-4" />
+                      Previewing manifest impact...
                     </div>
                   ) : null}
+                  {(manifestPreview?.impacts.length ?? 0) > 0 ? (
+                    manifestPreview?.impacts.map((impact) => (
+                      <div key={`${impact.field}:${impact.after}`} className="rounded-xl border border-border bg-muted/20 px-4 py-3">
+                        <div className="text-sm font-medium">{impact.field}</div>
+                        <div className="mt-1 text-xs text-muted-foreground">
+                          {impact.before || "empty"} -&gt; {impact.after || "empty"}
+                        </div>
+                        <div className="mt-2 text-sm">{impact.effect}</div>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="rounded-xl border border-dashed border-border px-4 py-3 text-sm text-muted-foreground">
+                      No runtime-visible delta in the current draft. Edit the manifest to see exact effects.
+                    </div>
+                  )}
+                  <div className="rounded-xl border border-border bg-card px-4 py-3">
+                    <div className="text-sm font-medium">Why runtime controls still exist</div>
+                    <div className="mt-2 space-y-2 text-sm text-muted-foreground">
+                      {manifestPreview?.runtimeNotes.map((note) => (
+                        <p key={note}>{note}</p>
+                      ))}
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+
+            <div className="flex min-h-0 flex-col gap-4 overflow-y-auto">
+              <Card>
+                <CardHeader>
+                  <CardTitle>Live Session</CardTitle>
+                  <CardDescription>Current runtime snapshot for the active workspace session.</CardDescription>
+                </CardHeader>
+                <CardContent className="grid gap-3 sm:grid-cols-2">
+                  {[
+                    ["Project", state?.session.project ?? "No active session"],
+                    ["Status", state?.session.status ?? "inactive"],
+                    ["Runner", state?.session.runner ?? "n/a"],
+                    ["Mode", state?.session.mode ?? "n/a"],
+                    ["Branch", state?.session.branch ?? "n/a"],
+                    ["Active task", state?.session.activeTask ?? "n/a"],
+                    ["Hooks", `${state?.session.hooksRunning ?? 0}/${state?.session.hooksTotal ?? 0}`],
+                    ["Manifest", state?.session.manifestValid ? "valid" : "missing or invalid"],
+                  ].map(([label, value]) => (
+                    <div key={label} className="rounded-xl border border-border bg-muted/20 px-3 py-3">
+                      <div className="text-[11px] font-semibold tracking-[0.12em] text-muted-foreground uppercase">{label}</div>
+                      <div className="mt-1 text-sm font-medium">{value}</div>
+                    </div>
+                  ))}
                 </CardContent>
               </Card>
 
               <Card>
                 <CardHeader>
                   <CardTitle>Runtime Controls</CardTitle>
-                  <CardDescription>Start, restore, reset, and clone without dropping out of the shell.</CardDescription>
+                  <CardDescription>Apply the saved manifest to the live workspace.</CardDescription>
                 </CardHeader>
                 <CardContent className="space-y-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="optidev-target">Target</Label>
-                    <Input
-                      id="optidev-target"
-                      data-testid="optidev-target"
-                      value={target}
-                      onChange={(event) => setTarget(event.currentTarget.value)}
-                    />
-                  </div>
                   <div className="flex flex-wrap gap-2">
                     <Button data-testid="optidev-start" onClick={() => actionMutation.mutate({ action: "start", target: resolvedTarget })}>
                       Start
-                    </Button>
-                    <Button variant="outline" onClick={() => actionMutation.mutate({ action: "go", target: resolvedTarget })}>
-                      Go
                     </Button>
                     <Button variant="outline" onClick={() => actionMutation.mutate({ action: "resume", target: resolvedTarget })}>
                       Resume
@@ -669,7 +810,7 @@ export function OptiDevWorkspace() {
                     </Button>
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="optidev-clone-name">Workspace clone</Label>
+                    <Label htmlFor="optidev-clone-name">Clone manifest to workspace</Label>
                     <div className="flex gap-2">
                       <Input
                         id="optidev-clone-name"
@@ -691,33 +832,43 @@ export function OptiDevWorkspace() {
                       </Button>
                     </div>
                   </div>
-                  <div className="flex flex-wrap gap-2">
-                    <Button
-                      variant="outline"
-                      data-testid="optidev-open-loops"
-                      onClick={() => actionMutation.mutate({ action: "memory_open_loops", target: resolvedTarget })}
-                    >
-                      Open loops
-                    </Button>
-                    <Button
-                      variant="outline"
-                      data-testid="optidev-advice"
-                      onClick={() => actionMutation.mutate({ action: "plugin", command: "advice", args: [] })}
-                    >
-                      Advice
-                    </Button>
-                  </div>
                 </CardContent>
               </Card>
-            </div>
 
-            <div className="grid min-h-0 gap-4 lg:grid-cols-2">
-              <Card className="min-h-0 overflow-hidden">
+              <Card>
                 <CardHeader>
                   <CardTitle>Memory</CardTitle>
-                  <CardDescription>Use the current repo memory graph instead of re-discovering context.</CardDescription>
+                  <CardDescription>
+                    The data is already graph-backed; the current gap is visualization, not storage.
+                  </CardDescription>
                 </CardHeader>
-                <CardContent className="flex min-h-0 flex-col gap-4 overflow-y-auto">
+                <CardContent className="space-y-4">
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {memoryGraphQuery.data ? (
+                      <>
+                        <div className="rounded-xl border border-border bg-muted/20 px-3 py-3">
+                          <div className="text-[11px] font-semibold tracking-[0.12em] text-muted-foreground uppercase">Nodes</div>
+                          <div className="mt-1 text-sm">
+                            {memoryGraphQuery.data.nodes.length} total
+                          </div>
+                        </div>
+                        <div className="rounded-xl border border-border bg-muted/20 px-3 py-3">
+                          <div className="text-[11px] font-semibold tracking-[0.12em] text-muted-foreground uppercase">Edges</div>
+                          <div className="mt-1 text-sm">
+                            {memoryGraphQuery.data.edges.length} total
+                          </div>
+                        </div>
+                        <div className="rounded-xl border border-border bg-muted/20 px-3 py-3">
+                          <div className="text-[11px] font-semibold tracking-[0.12em] text-muted-foreground uppercase">Features</div>
+                          <div className="mt-1 text-sm">{memoryGraphQuery.data.stats.features}</div>
+                        </div>
+                        <div className="rounded-xl border border-border bg-muted/20 px-3 py-3">
+                          <div className="text-[11px] font-semibold tracking-[0.12em] text-muted-foreground uppercase">Open loops</div>
+                          <div className="mt-1 text-sm">{memoryGraphQuery.data.stats.openLoops}</div>
+                        </div>
+                      </>
+                    ) : null}
+                  </div>
                   <div className="space-y-2">
                     {(state?.memorySummary ?? []).map((line) => (
                       <div key={line} className="rounded-lg border border-border bg-muted/20 px-3 py-2 text-sm">
@@ -725,12 +876,17 @@ export function OptiDevWorkspace() {
                       </div>
                     ))}
                   </div>
-                  <div className="grid gap-2 md:grid-cols-[120px_minmax(0,1fr)_auto]">
+                  <div className="rounded-xl border border-border bg-card px-4 py-3">
+                    <div className="text-sm font-medium">Graph view implementation path</div>
+                    <div className="mt-2 space-y-2 text-sm text-muted-foreground">
+                      {memoryGraphQuery.data?.implementationNotes.map((note) => (
+                        <p key={note}>{note}</p>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="grid gap-2 md:grid-cols-[120px_minmax(0,1fr)_auto_auto]">
                     <Input value={memoryKind} onChange={(event) => setMemoryKind(event.currentTarget.value)} />
-                    <Input
-                      value={memoryIdentifier}
-                      onChange={(event) => setMemoryIdentifier(event.currentTarget.value)}
-                    />
+                    <Input value={memoryIdentifier} onChange={(event) => setMemoryIdentifier(event.currentTarget.value)} />
                     <Button
                       variant="outline"
                       onClick={() =>
@@ -744,30 +900,27 @@ export function OptiDevWorkspace() {
                     >
                       Show
                     </Button>
+                    <Button
+                      variant="outline"
+                      data-testid="optidev-open-loops"
+                      onClick={() => actionMutation.mutate({ action: "memory_open_loops", target: resolvedTarget })}
+                    >
+                      Open loops
+                    </Button>
                   </div>
                 </CardContent>
               </Card>
 
-              <Card className="min-h-0 overflow-hidden">
+              <Card>
                 <CardHeader>
-                  <CardTitle>Projects And Logs</CardTitle>
-                  <CardDescription>Keep discovered projects and runtime output visible beside the controls.</CardDescription>
+                  <CardTitle>Output</CardTitle>
+                  <CardDescription>Status, logs, and action feedback stay visible but secondary.</CardDescription>
                 </CardHeader>
-                <CardContent className="flex min-h-0 flex-col gap-4 overflow-y-auto">
-                  <div data-testid="optidev-projects" className="space-y-2">
-                    {state?.projects.map((project) => (
-                      <div key={`${project.name}:${project.path}`} className="rounded-lg border border-border bg-muted/20 px-3 py-2">
-                        <div className="font-medium">{project.name}</div>
-                        <div className="break-all text-xs text-muted-foreground">{project.path}</div>
-                      </div>
-                    ))}
-                  </div>
+                <CardContent className="space-y-3">
                   <pre className="rounded-xl border border-border bg-muted/20 p-4 text-sm whitespace-pre-wrap" data-testid="optidev-status">
                     {state?.status}
                   </pre>
-                  <pre className="rounded-xl border border-border bg-muted/20 p-4 text-xs whitespace-pre-wrap">
-                    {state?.logs}
-                  </pre>
+                  <pre className="rounded-xl border border-border bg-muted/20 p-4 text-xs whitespace-pre-wrap">{state?.logs}</pre>
                   <pre className="rounded-xl border border-border bg-card p-4 text-sm whitespace-pre-wrap" data-testid="optidev-output">
                     {output}
                   </pre>
@@ -776,184 +929,66 @@ export function OptiDevWorkspace() {
             </div>
           </div>
         ) : (
-          <div className="grid h-full min-h-0 gap-4 xl:grid-cols-[360px_minmax(0,1fr)]">
-            <div className="flex min-h-0 flex-col gap-4">
-              <DirectoryBrowser
-                scope={pluginScope}
-                currentPath={pluginPath}
-                selectedPath={selectedPluginFile}
-                title={pluginScope === "agents" ? "Agent Files" : "Skill Files"}
-                description="Edit repo-local automation assets without leaving the shell."
-                onOpenDirectory={(nextPath) => {
-                  setPluginPath(nextPath);
-                  setSelectedPluginFile("");
-                }}
-                onSelectFile={setSelectedPluginFile}
-              />
-              <Card>
-                <CardHeader>
-                  <CardTitle>Plugin Scope</CardTitle>
-                  <CardDescription>Switch between agents and skills, then open or create a file.</CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="flex gap-2">
-                    <Button
-                      variant={pluginScope === "agents" ? "default" : "outline"}
-                      onClick={() => setPluginScope("agents")}
-                    >
-                      <BotIcon className="mr-2 size-4" />
-                      Agents
-                    </Button>
-                    <Button
-                      variant={pluginScope === "skills" ? "default" : "outline"}
-                      onClick={() => setPluginScope("skills")}
-                    >
-                      <BookMarkedIcon className="mr-2 size-4" />
-                      Skills
-                    </Button>
+          <div className="grid h-full min-h-0 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(320px,0.8fr)]">
+            <Card className="min-h-0 overflow-hidden">
+              <CardHeader>
+                <CardTitle>Current Plugins</CardTitle>
+                <CardDescription>
+                  The screen is intentionally reduced to inventory only. Editing/config UX can come back later in a cleaner form.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3 overflow-y-auto">
+                {pluginsQuery.isLoading ? (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Spinner className="size-4" />
+                    Loading plugins...
                   </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="plugin-new-path">Create or overwrite file</Label>
-                    <div className="flex gap-2">
-                      <Input
-                        id="plugin-new-path"
-                        value={pluginDraftPath}
-                        onChange={(event) => setPluginDraftPath(event.currentTarget.value)}
-                      />
-                      <Button
-                        variant="outline"
-                        onClick={() =>
-                          savePluginMutation.mutate({
-                            scope: pluginScope,
-                            path: pluginDraftPath.trim(),
-                            content: "",
-                          })
-                        }
-                      >
-                        Create
-                      </Button>
-                    </div>
+                ) : pluginsQuery.isError ? (
+                  <div className="text-sm text-destructive">
+                    {pluginsQuery.error instanceof Error ? pluginsQuery.error.message : "Failed to load plugins."}
                   </div>
-                </CardContent>
-              </Card>
-            </div>
-
-            <div className="grid min-h-0 gap-4 lg:grid-rows-[minmax(0,1fr)_auto]">
-              <Card className="min-h-0 overflow-hidden">
-                <CardHeader>
-                  <CardTitle>{selectedPluginFile || "Plugin Editor"}</CardTitle>
-                  <CardDescription>Edit the selected agent or skill file directly in the forked UI.</CardDescription>
-                </CardHeader>
-                <CardContent className="flex min-h-0 flex-col gap-4 overflow-hidden">
-                  {selectedPluginFile.length === 0 ? (
-                    <div className="flex min-h-[240px] items-center justify-center text-sm text-muted-foreground">
-                      Select or create a plugin file to edit it.
-                    </div>
-                  ) : (
-                    <>
-                      {pluginFileQuery.isError ? (
-                        <div className="text-sm text-destructive">
-                          {pluginFileQuery.error instanceof Error ? pluginFileQuery.error.message : "Failed to load plugin file."}
+                ) : (
+                  pluginsQuery.data?.map((plugin) => (
+                    <div
+                      key={plugin.id}
+                      className="rounded-2xl border border-border bg-muted/20 px-4 py-4"
+                      data-testid={`optidev-plugin-${plugin.id}`}
+                    >
+                      <div className="flex items-center justify-between gap-3">
+                        <div>
+                          <div className="text-sm font-medium">{plugin.title}</div>
+                          <div className="text-xs text-muted-foreground">{plugin.category}</div>
                         </div>
-                      ) : null}
-                      <Textarea
-                        className="min-h-0 flex-1 resize-none font-mono text-sm"
-                        data-testid="optidev-plugin-editor"
-                        value={pluginEditorContent}
-                        onChange={(event) => setPluginEditorContent(event.currentTarget.value)}
-                      />
-                      <div className="flex justify-end gap-2">
-                        <Button
-                          variant="outline"
-                          onClick={() => setPluginEditorContent(pluginFileQuery.data?.content ?? "")}
-                        >
-                          Revert
-                        </Button>
-                        <Button
-                          data-testid="optidev-plugin-save"
-                          onClick={() =>
-                            savePluginMutation.mutate({
-                              scope: pluginScope,
-                              path: selectedPluginFile,
-                              content: pluginEditorContent,
-                            })
-                          }
-                        >
-                          <SaveIcon className="mr-2 size-4" />
-                          Save
-                        </Button>
+                        <div className="rounded-full border border-border px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+                          {plugin.enabled ? "enabled" : "available"}
+                        </div>
                       </div>
-                    </>
-                  )}
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader>
-                  <CardTitle>Telegram</CardTitle>
-                  <CardDescription>Keep bridge credentials and lifecycle controls near the rest of your automation surface.</CardDescription>
-                </CardHeader>
-                <CardContent className="grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,220px)]">
-                  <div className="space-y-3">
-                    <div className="space-y-2">
-                      <Label htmlFor="telegram-token">Bot token</Label>
-                      <Input
-                        id="telegram-token"
-                        data-testid="optidev-telegram-token"
-                        value={telegramForm.botToken}
-                        onChange={(event) => {
-                          const nextValue = event.currentTarget.value;
-                          setTelegramForm((current) => ({ ...current, botToken: nextValue }));
-                        }}
-                      />
+                      <p className="mt-3 text-sm">{plugin.summary}</p>
+                      <div className="mt-3 space-y-1 text-xs text-muted-foreground">
+                        {plugin.details.map((detail) => (
+                          <div key={detail}>{detail}</div>
+                        ))}
+                      </div>
                     </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="telegram-chat-id">Chat ID</Label>
-                      <Input
-                        id="telegram-chat-id"
-                        data-testid="optidev-telegram-chat-id"
-                        value={telegramForm.chatId}
-                        onChange={(event) => {
-                          const nextValue = event.currentTarget.value;
-                          setTelegramForm((current) => ({ ...current, chatId: nextValue }));
-                        }}
-                      />
-                    </div>
-                  </div>
-                  <div className="flex flex-col gap-2">
-                    <Button data-testid="optidev-telegram-save" onClick={() => saveTelegramMutation.mutate(telegramForm)}>
-                      Save settings
-                    </Button>
-                    <Button
-                      variant="outline"
-                      onClick={() => actionMutation.mutate({ action: "plugin", command: "telegram", args: ["status"] })}
-                    >
-                      Status
-                    </Button>
-                    <Button
-                      variant="outline"
-                      onClick={() => actionMutation.mutate({ action: "plugin", command: "telegram", args: ["start"] })}
-                    >
-                      Start bridge
-                    </Button>
-                    <Button
-                      variant="outline"
-                      onClick={() => actionMutation.mutate({ action: "plugin", command: "telegram", args: ["stop"] })}
-                    >
-                      Stop bridge
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
+                  ))
+                )}
+              </CardContent>
+            </Card>
 
-              <Card>
-                <CardContent className="p-4">
-                  <pre className="text-sm whitespace-pre-wrap" data-testid="optidev-output">
-                    {output}
-                  </pre>
-                </CardContent>
-              </Card>
-            </div>
+            <Card>
+              <CardHeader>
+                <CardTitle>Projects</CardTitle>
+                <CardDescription>The active route is focused on runtime plugins, not editing plugin files.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                {state?.projects.map((project) => (
+                  <div key={`${project.name}:${project.path}`} className="rounded-lg border border-border bg-muted/20 px-3 py-2">
+                    <div className="font-medium">{project.name}</div>
+                    <div className="break-all text-xs text-muted-foreground">{project.path}</div>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
           </div>
         )}
       </div>

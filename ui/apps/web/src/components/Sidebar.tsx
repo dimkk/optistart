@@ -1,9 +1,11 @@
 import {
   ChevronRightIcon,
+  CopyIcon,
   FolderIcon,
   FolderOpenIcon,
   GitPullRequestIcon,
   RocketIcon,
+  Settings2Icon,
   SquarePenIcon,
   TerminalIcon,
 } from "lucide-react";
@@ -48,6 +50,8 @@ import {
   SidebarContent,
   SidebarFooter,
   SidebarGroup,
+  SidebarGroupContent,
+  SidebarGroupLabel,
   SidebarHeader,
   SidebarMenuAction,
   SidebarMenu,
@@ -61,9 +65,16 @@ import {
 } from "./ui/sidebar";
 import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "../worktreeCleanup";
 import { isNonEmpty as isNonEmptyString } from "effect/String";
+import {
+  readStoredOptiDevTab,
+  setStoredOptiDevTab,
+  subscribeOptiDevTab,
+} from "./optidev/optidevTabs";
+import { debugOptiDev } from "../optidevDebug";
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const THREAD_PREVIEW_LIMIT = 6;
+const CODEX_FOLDER_GROUP_STATE_KEY = "t3code:sidebar-codex-folder-groups:v1";
 
 async function copyTextToClipboard(text: string): Promise<void> {
   if (typeof navigator === "undefined" || navigator.clipboard?.writeText === undefined) {
@@ -80,6 +91,48 @@ function formatRelativeTime(iso: string): string {
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `${hours}h ago`;
   return `${Math.floor(hours / 24)}d ago`;
+}
+
+function folderNameFromCwd(cwd: string | null): string {
+  if (!cwd) {
+    return "(cwd unavailable)";
+  }
+  const normalized = cwd.replace(/[\\/]+$/g, "");
+  if (!normalized) {
+    return cwd;
+  }
+  const segments = normalized.split(/[\\/]/).filter(Boolean);
+  return segments.at(-1) ?? cwd;
+}
+
+function readPersistedCodexFolderGroups(): ReadonlySet<string> {
+  if (typeof window === "undefined") {
+    return new Set();
+  }
+  try {
+    const raw = window.localStorage.getItem(CODEX_FOLDER_GROUP_STATE_KEY);
+    if (!raw) {
+      return new Set();
+    }
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) {
+      return new Set();
+    }
+    return new Set(parsed.filter((value): value is string => typeof value === "string"));
+  } catch {
+    return new Set();
+  }
+}
+
+function persistCodexFolderGroups(groups: ReadonlySet<string>): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    window.localStorage.setItem(CODEX_FOLDER_GROUP_STATE_KEY, JSON.stringify([...groups]));
+  } catch {
+    // Ignore storage failures to avoid breaking sidebar interactions.
+  }
 }
 
 interface ThreadStatusPill {
@@ -103,6 +156,117 @@ interface PrStatusIndicator {
 }
 
 type ThreadPr = GitStatusResult["pr"];
+
+interface SidebarRunnerInventoryEntry {
+  alias: number;
+  runner: string;
+  guid: string;
+  cwd: string | null;
+  latestUserPhrase: string | null;
+  runtimeStatus: string;
+  sessionStatus: string | null;
+  lastSeenAt: string;
+  manifestStatus: "present" | "missing";
+  manifestNote: string | null;
+}
+
+interface SidebarCodexSessionFolderGroup {
+  key: string;
+  folderName: string;
+  latestSeenAt: string;
+  latestUserPhrase: string | null;
+  missingManifest: boolean;
+  entries: SidebarRunnerInventoryEntry[];
+}
+
+function isSidebarRunnerInventoryEntry(value: unknown): value is SidebarRunnerInventoryEntry {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.alias === "number" &&
+    typeof candidate.runner === "string" &&
+    typeof candidate.guid === "string" &&
+    (typeof candidate.cwd === "string" || candidate.cwd === null) &&
+    (typeof candidate.latestUserPhrase === "string" || candidate.latestUserPhrase === null) &&
+    typeof candidate.runtimeStatus === "string" &&
+    (typeof candidate.sessionStatus === "string" || candidate.sessionStatus === null) &&
+    typeof candidate.lastSeenAt === "string" &&
+    (candidate.manifestStatus === "present" || candidate.manifestStatus === "missing") &&
+    (typeof candidate.manifestNote === "string" || candidate.manifestNote === null)
+  );
+}
+
+async function fetchSidebarRunnerInventory(): Promise<SidebarRunnerInventoryEntry[]> {
+  const response = await fetch("/api/optidev/action", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      action: "codex_sessions",
+    }),
+  });
+  const body = (await response.json()) as { ok?: boolean; lines?: string[]; data?: unknown };
+  if (!response.ok || body.ok === false) {
+    throw new Error(body.lines?.join("\n") || `Codex session request failed: ${response.status}`);
+  }
+  if (!Array.isArray(body.data)) {
+    return [];
+  }
+  return body.data.filter(isSidebarRunnerInventoryEntry);
+}
+
+function buildCodexSessionFolderGroups(
+  entries: ReadonlyArray<SidebarRunnerInventoryEntry>,
+): SidebarCodexSessionFolderGroup[] {
+  const grouped = new Map<string, SidebarCodexSessionFolderGroup>();
+
+  for (const entry of entries) {
+    const folderName = folderNameFromCwd(entry.cwd);
+    const key = folderName.toLowerCase();
+    const existing = grouped.get(key);
+
+    if (!existing) {
+      grouped.set(key, {
+        key,
+        folderName,
+        latestSeenAt: entry.lastSeenAt,
+        latestUserPhrase: entry.latestUserPhrase,
+        missingManifest: entry.manifestStatus === "missing",
+        entries: [entry],
+      });
+      continue;
+    }
+
+    existing.entries.push(entry);
+    if (entry.lastSeenAt.localeCompare(existing.latestSeenAt) > 0) {
+      existing.latestSeenAt = entry.lastSeenAt;
+      existing.latestUserPhrase = entry.latestUserPhrase;
+    }
+    if (entry.manifestStatus === "missing") {
+      existing.missingManifest = true;
+    }
+  }
+
+  return [...grouped.values()]
+    .map((group) => ({
+      ...group,
+      entries: group.entries.toSorted((left, right) => {
+        if (left.lastSeenAt !== right.lastSeenAt) {
+          return right.lastSeenAt.localeCompare(left.lastSeenAt);
+        }
+        return left.guid.localeCompare(right.guid);
+      }),
+    }))
+    .toSorted((left, right) => {
+      if (left.latestSeenAt !== right.latestSeenAt) {
+        return right.latestSeenAt.localeCompare(left.latestSeenAt);
+      }
+      return left.folderName.localeCompare(right.folderName);
+    });
+}
 
 function hasUnseenCompletion(thread: Thread): boolean {
   if (!thread.latestTurn?.completedAt) return false;
@@ -261,6 +425,7 @@ function ProjectFavicon({ cwd }: { cwd: string }) {
 export default function Sidebar() {
   const projects = useStore((store) => store.projects);
   const threads = useStore((store) => store.threads);
+  const syncServerReadModel = useStore((store) => store.syncServerReadModel);
   const markThreadUnread = useStore((store) => store.markThreadUnread);
   const toggleProject = useStore((store) => store.toggleProject);
   const clearComposerDraftForThread = useComposerDraftStore((store) => store.clearThreadDraft);
@@ -280,14 +445,23 @@ export default function Sidebar() {
   );
   const navigate = useNavigate();
   const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const [activeOptiDevTab, setActiveOptiDevTab] = useState(() => readStoredOptiDevTab());
   const { settings: appSettings } = useAppSettings();
   const routeThreadId = useParams({
     strict: false,
     select: (params) => (params.threadId ? ThreadId.makeUnsafe(params.threadId) : null),
   });
+
+  useEffect(() => subscribeOptiDevTab(setActiveOptiDevTab), []);
   const { data: keybindings = EMPTY_KEYBINDINGS } = useQuery({
     ...serverConfigQueryOptions(),
     select: (config) => config.keybindings,
+  });
+  const liveRunnerInventoryQuery = useQuery({
+    queryKey: ["optidev", "runner-list", "sidebar"],
+    queryFn: fetchSidebarRunnerInventory,
+    refetchInterval: 15_000,
+    staleTime: 5_000,
   });
   const queryClient = useQueryClient();
   const removeWorktreeMutation = useMutation(gitRemoveWorktreeMutationOptions({ queryClient }));
@@ -300,6 +474,9 @@ export default function Sidebar() {
   const [expandedThreadListsByProject, setExpandedThreadListsByProject] = useState<
     ReadonlySet<ProjectId>
   >(() => new Set());
+  const [expandedCodexFolderGroups, setExpandedCodexFolderGroups] = useState<ReadonlySet<string>>(
+    () => readPersistedCodexFolderGroups(),
+  );
   const renamingCommittedRef = useRef(false);
   const renamingInputRef = useRef<HTMLInputElement | null>(null);
   const [desktopUpdateState, setDesktopUpdateState] = useState<DesktopUpdateState | null>(null);
@@ -314,6 +491,35 @@ export default function Sidebar() {
     () => new Map(projects.map((project) => [project.id, project.cwd] as const)),
     [projects],
   );
+  const liveCodexSessions = useMemo(
+    () =>
+      (liveRunnerInventoryQuery.data ?? []).filter((entry) => entry.runner.toLowerCase() === "codex"),
+    [liveRunnerInventoryQuery.data],
+  );
+  const liveCodexSessionGroups = useMemo(
+    () => buildCodexSessionFolderGroups(liveCodexSessions),
+    [liveCodexSessions],
+  );
+  useEffect(() => {
+    setExpandedCodexFolderGroups((current) => {
+      const availableKeys = new Set(liveCodexSessionGroups.map((group) => group.key));
+      const next = new Set([...current].filter((key) => availableKeys.has(key)));
+      if (next.size === current.size) {
+        let changed = false;
+        for (const key of current) {
+          if (!next.has(key)) {
+            changed = true;
+            break;
+          }
+        }
+        if (!changed) {
+          return current;
+        }
+      }
+      persistCodexFolderGroups(next);
+      return next;
+    });
+  }, [liveCodexSessionGroups]);
   const threadGitTargets = useMemo(
     () =>
       threads.map((thread) => ({
@@ -977,6 +1183,154 @@ export default function Sidebar() {
     });
   }, []);
 
+  const handleCopyCodexGuid = useCallback(async (guid: string) => {
+    try {
+      await copyTextToClipboard(guid);
+      toastManager.add({
+        type: "success",
+        title: "Codex GUID copied",
+        description: guid,
+      });
+    } catch (error) {
+      toastManager.add({
+        type: "error",
+        title: "Failed to copy Codex GUID",
+        description: error instanceof Error ? error.message : "An error occurred.",
+      });
+    }
+  }, []);
+
+  const handleCodexFolderGroupOpenChange = useCallback((groupKey: string, open: boolean) => {
+    setExpandedCodexFolderGroups((current) => {
+      const next = new Set(current);
+      if (open) {
+        next.add(groupKey);
+      } else {
+        next.delete(groupKey);
+      }
+      persistCodexFolderGroups(next);
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!routeThreadId) {
+      return;
+    }
+
+    const activeGroup = liveCodexSessionGroups.find((group) =>
+      group.entries.some((entry) => entry.guid === routeThreadId),
+    );
+    if (!activeGroup) {
+      return;
+    }
+
+    setExpandedCodexFolderGroups((current) => {
+      if (current.has(activeGroup.key)) {
+        return current;
+      }
+      const next = new Set(current);
+      next.add(activeGroup.key);
+      persistCodexFolderGroups(next);
+      return next;
+    });
+  }, [liveCodexSessionGroups, routeThreadId]);
+
+  const handleConnectCodexSession = useCallback(
+    async (entry: SidebarRunnerInventoryEntry) => {
+      const progressToastId = toastManager.add({
+        type: "loading",
+        title: "Opening Codex session...",
+        description: entry.latestUserPhrase ?? entry.guid,
+        timeout: 0,
+      });
+      try {
+        debugOptiDev("sidebar.codex-connect.start", {
+          guid: entry.guid,
+          cwd: entry.cwd,
+          manifestStatus: entry.manifestStatus,
+          latestUserPhrase: entry.latestUserPhrase,
+        });
+        const response = await fetch("/api/optidev/action", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            action: "codex_connect",
+            identifier: entry.guid,
+          }),
+        });
+        const body = (await response.json()) as {
+          ok?: boolean;
+          lines?: string[];
+          data?: { threadId?: string };
+        };
+        if (!response.ok || body.ok === false) {
+          throw new Error(body.lines?.join("\n") || "Failed to connect Codex session.");
+        }
+
+        debugOptiDev("sidebar.codex-connect.response", {
+          guid: entry.guid,
+          threadId: body.data?.threadId ?? entry.guid,
+          lines: body.lines ?? [],
+        });
+
+        const api = readNativeApi();
+        if (api) {
+          try {
+            const snapshot = await api.orchestration.getSnapshot();
+            debugOptiDev("sidebar.codex-connect.snapshot", {
+              guid: entry.guid,
+              threadId: body.data?.threadId ?? entry.guid,
+              snapshotSequence: snapshot.snapshotSequence,
+              matchedThread: snapshot.threads.find(
+                (thread) => thread.id === (body.data?.threadId ?? entry.guid),
+              )
+                ? {
+                    id: body.data?.threadId ?? entry.guid,
+                    messageCount:
+                      snapshot.threads.find((thread) => thread.id === (body.data?.threadId ?? entry.guid))
+                        ?.messages.length ?? 0,
+                    sessionStatus:
+                      snapshot.threads.find((thread) => thread.id === (body.data?.threadId ?? entry.guid))
+                        ?.session?.status ?? null,
+                  }
+                : null,
+            });
+            syncServerReadModel(snapshot);
+          } catch {
+            // The attach already succeeded server-side; keep navigation usable even if
+            // the follow-up snapshot fetch races the runtime transport.
+          }
+        }
+
+        await liveRunnerInventoryQuery.refetch().catch(() => undefined);
+
+        const threadId =
+          typeof body.data?.threadId === "string" && body.data.threadId.length > 0
+            ? body.data.threadId
+            : entry.guid;
+        await navigate({
+          to: "/$threadId",
+          params: { threadId },
+        });
+        toastManager.update(progressToastId, {
+          type: "success",
+          title: "Codex session opened",
+          description: entry.latestUserPhrase ?? threadId,
+        });
+      } catch (error) {
+        toastManager.update(progressToastId, {
+          type: "error",
+          title: "Failed to connect Codex session",
+          description: error instanceof Error ? error.message : "An error occurred.",
+        });
+      }
+    },
+    [liveRunnerInventoryQuery, navigate, syncServerReadModel],
+  );
+
   const wordmark = (
     <div className="flex items-center gap-2">
       <SidebarTrigger className="shrink-0 md:hidden" />
@@ -1033,8 +1387,9 @@ export default function Sidebar() {
                 data-testid="sidebar-optidev"
                 size="sm"
                 className="gap-2 px-2 py-1.5 text-left"
-                data-active={pathname === "/optidev"}
+                data-active={pathname === "/optidev" && activeOptiDevTab === "files"}
                 onClick={() => {
+                  setStoredOptiDevTab("files");
                   void navigate({ to: "/optidev" });
                 }}
               >
@@ -1042,7 +1397,166 @@ export default function Sidebar() {
                 <span className="truncate">OptiDev Workspace</span>
               </SidebarMenuButton>
             </SidebarMenuItem>
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                data-testid="sidebar-optidev-settings"
+                size="sm"
+                className="gap-2 px-2 py-1.5 text-left"
+                data-active={pathname === "/optidev" && activeOptiDevTab === "optidev"}
+                onClick={() => {
+                  setStoredOptiDevTab("optidev");
+                  void navigate({ to: "/optidev" });
+                }}
+              >
+                <Settings2Icon className="size-3.5 shrink-0" />
+                <span className="truncate">OptiDev Settings</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
           </SidebarMenu>
+        </SidebarGroup>
+
+        <SidebarGroup className="px-2 py-0">
+          <SidebarGroupLabel>Codex Sessions</SidebarGroupLabel>
+          <SidebarGroupContent>
+            {liveRunnerInventoryQuery.isLoading ? (
+              <div className="px-2 pb-2 text-[11px] text-muted-foreground/60">Loading live sessions...</div>
+            ) : liveRunnerInventoryQuery.isError ? (
+              <div className="px-2 pb-2 text-[11px] text-destructive/80">
+                {liveRunnerInventoryQuery.error instanceof Error
+                  ? liveRunnerInventoryQuery.error.message
+                  : "Failed to load Codex sessions."}
+              </div>
+            ) : liveCodexSessionGroups.length === 0 ? (
+              <div className="px-2 pb-2 text-[11px] text-muted-foreground/60">No Codex sessions found.</div>
+            ) : (
+              <SidebarMenu>
+                {liveCodexSessionGroups.map((group) => {
+                  const groupOpen = expandedCodexFolderGroups.has(group.key);
+                  const groupHasActiveThread =
+                    routeThreadId !== null &&
+                    group.entries.some((entry) => entry.guid === routeThreadId);
+                  return (
+                    <Collapsible
+                      key={group.key}
+                      open={groupOpen}
+                      onOpenChange={(open) => handleCodexFolderGroupOpenChange(group.key, open)}
+                    >
+                      <SidebarMenuItem>
+                        <CollapsibleTrigger
+                          render={
+                            <SidebarMenuButton
+                              isActive={groupHasActiveThread}
+                              size="sm"
+                              className="h-auto items-start gap-2 px-2 py-1.5 text-left hover:bg-accent"
+                              data-testid={`sidebar-codex-group-${group.key.replaceAll(/[^A-Za-z0-9_-]/g, "-")}`}
+                            />
+                          }
+                        >
+                            <ChevronRightIcon
+                              className={`mt-0.5 size-3.5 shrink-0 text-muted-foreground/70 transition-transform duration-150 ${
+                                groupOpen ? "rotate-90" : ""
+                              }`}
+                            />
+                            <FolderIcon className="mt-0.5 size-3.5 shrink-0 text-muted-foreground/70" />
+                            <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                              <div className="flex min-w-0 items-center gap-1.5">
+                                {group.missingManifest ? (
+                                  <span className="text-xs font-semibold text-amber-600 dark:text-amber-300">*</span>
+                                ) : null}
+                                <span className="truncate text-xs font-medium text-foreground/90">
+                                  {group.folderName}
+                                </span>
+                                <span className="shrink-0 text-[10px] text-muted-foreground/60">
+                                  {group.entries.length}
+                                </span>
+                              </div>
+                              {group.latestUserPhrase ? (
+                                <div className="truncate text-[10px] text-muted-foreground/55">
+                                  {group.latestUserPhrase}
+                                </div>
+                              ) : null}
+                            </div>
+                        </CollapsibleTrigger>
+                      </SidebarMenuItem>
+                      <CollapsibleContent>
+                        <SidebarMenuSub>
+                          {group.entries.map((entry) => {
+                            const missingManifest = entry.manifestStatus === "missing";
+                            const folderName = folderNameFromCwd(entry.cwd);
+                            return (
+                              <SidebarMenuSubItem key={entry.guid}>
+                                <div className="relative">
+                                  <SidebarMenuSubButton
+                                    isActive={routeThreadId === entry.guid}
+                                    className="h-auto cursor-pointer items-start px-2 py-1.5 pr-8 text-left hover:bg-accent"
+                                    data-testid={`sidebar-codex-session-${entry.guid.replaceAll(/[^A-Za-z0-9_-]/g, "-")}`}
+                                    title={
+                                      missingManifest
+                                        ? `${folderName}\n${entry.guid}\n${entry.manifestNote ?? "No OptiDev manifest found."}`
+                                        : `${folderName}\n${entry.guid}`
+                                    }
+                                    onClick={() => {
+                                      void handleConnectCodexSession(entry);
+                                    }}
+                                  >
+                                    <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                                      <div className="flex min-w-0 items-center gap-1.5">
+                                        {missingManifest ? (
+                                          <span className="text-xs font-semibold text-amber-600 dark:text-amber-300">*</span>
+                                        ) : (
+                                          <span className="text-[10px] text-muted-foreground/60">{entry.alias}.</span>
+                                        )}
+                                        <span className="truncate text-[11px] font-medium text-foreground/90">
+                                          {formatRelativeTime(entry.lastSeenAt)}
+                                        </span>
+                                      </div>
+                                      {entry.latestUserPhrase ? (
+                                        <div className="truncate text-[10px] text-muted-foreground/55">
+                                          {entry.latestUserPhrase}
+                                        </div>
+                                      ) : null}
+                                      <div className="truncate text-[10px] text-muted-foreground/70">
+                                        {entry.guid}
+                                      </div>
+                                    </div>
+                                  </SidebarMenuSubButton>
+                                  <Tooltip>
+                                    <TooltipTrigger
+                                      render={
+                                        <SidebarMenuAction
+                                          render={
+                                            <button
+                                              type="button"
+                                              aria-label={`Copy Codex GUID for ${folderName}`}
+                                              data-testid={`sidebar-codex-session-copy-${entry.guid.replaceAll(/[^A-Za-z0-9_-]/g, "-")}`}
+                                            />
+                                          }
+                                          showOnHover
+                                          className="top-1 right-1 size-5 rounded-md p-0 text-muted-foreground/70 hover:bg-secondary hover:text-foreground"
+                                          onClick={(event) => {
+                                            event.preventDefault();
+                                            event.stopPropagation();
+                                            void handleCopyCodexGuid(entry.guid);
+                                          }}
+                                        >
+                                          <CopyIcon className="size-3.5" />
+                                        </SidebarMenuAction>
+                                      }
+                                    />
+                                    <TooltipPopup side="top">Copy GUID</TooltipPopup>
+                                  </Tooltip>
+                                </div>
+                              </SidebarMenuSubItem>
+                            );
+                          })}
+                        </SidebarMenuSub>
+                      </CollapsibleContent>
+                    </Collapsible>
+                  );
+                })}
+              </SidebarMenu>
+            )}
+          </SidebarGroupContent>
         </SidebarGroup>
 
         <SidebarGroup className="px-2 py-2">

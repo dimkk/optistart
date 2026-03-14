@@ -32,6 +32,93 @@ export interface OptiDevFilePayload {
   editable: boolean;
 }
 
+export interface OptiDevWorkspaceManifestPayload {
+  project: string;
+  workspace: {
+    active_task: string;
+    branch: string;
+    head_commit: string;
+    mux: string;
+  };
+  agents: Array<{
+    name: string;
+    runner: string;
+  }>;
+  layout: Array<{
+    name: string;
+    pane: string;
+  }>;
+  services: Array<{
+    name: string;
+    command: string;
+  }>;
+  tests: {
+    command: string;
+  };
+  logs: {
+    command: string;
+  };
+  context: {
+    agents_dir: string;
+    skills_dir: string;
+    mcp_dir: string;
+  };
+}
+
+export interface OptiDevManifestImpactPayload {
+  field: string;
+  before: string;
+  after: string;
+  effect: string;
+}
+
+export interface OptiDevManifestPayload {
+  path: string;
+  content: string;
+  manifest: OptiDevWorkspaceManifestPayload;
+  impacts: OptiDevManifestImpactPayload[];
+  runtimeNotes: string[];
+}
+
+export interface OptiDevMemoryGraphNodePayload {
+  id: string;
+  kind: "project" | "release" | "task" | "feature" | "decision" | "open_loop";
+  label: string;
+  status: string | null;
+  group: string;
+  highlight: boolean;
+}
+
+export interface OptiDevMemoryGraphEdgePayload {
+  source: string;
+  target: string;
+  kind: string;
+}
+
+export interface OptiDevMemoryGraphPayload {
+  project: string;
+  focusNodeId: string | null;
+  nodes: OptiDevMemoryGraphNodePayload[];
+  edges: OptiDevMemoryGraphEdgePayload[];
+  stats: {
+    features: number;
+    tasks: number;
+    releases: number;
+    decisions: number;
+    openLoops: number;
+  };
+  implementationNotes: string[];
+}
+
+export interface OptiDevPluginInventoryEntryPayload {
+  id: string;
+  title: string;
+  category: "analysis" | "integration" | "catalog";
+  enabled: boolean;
+  summary: string;
+  details: string[];
+}
+
 export interface OptiDevSessionPayload {
   project: string | null;
   projectPath: string | null;
@@ -52,6 +139,16 @@ export interface OptiDevSessionPayload {
 export interface OptiDevTelegramConfigPayload {
   botToken: string;
   chatId: string;
+  bridge?: OptiDevTelegramBridgeStatusPayload;
+}
+
+export interface OptiDevTelegramBridgeStatusPayload {
+  enabled: boolean;
+  chatId: string;
+  tokenHint: string;
+  targetThreadId: string | null;
+  targetUpdatedAt: string | null;
+  statusLine: string;
 }
 
 export interface OptiDevRunnerInventoryEntry {
@@ -63,6 +160,16 @@ export interface OptiDevRunnerInventoryEntry {
   runtimeStatus: string;
   sessionStatus: string | null;
   lastSeenAt: string;
+  manifestStatus: "present" | "missing";
+  manifestNote: string | null;
+}
+
+export interface OptiDevBuildInfoPayload {
+  localT3Version: string | null;
+  upstreamT3Version: string | null;
+  upstreamT3Subject: string | null;
+  optidProdVersion: string | null;
+  optidNightlyVersion: string | null;
 }
 
 export interface OptiDevStatePayload {

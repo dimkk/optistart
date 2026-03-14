@@ -218,11 +218,13 @@ http://127.0.0.1:3773/optidev
 The forked OptiDev route exposes:
 
 - discovered projects with resolved paths
+- read/save/impact preview for `.optidev/workspace.yaml`
 - runtime actions (`init`, `start`, `go`, `resume`, `reset`, `stop`)
 - workspace clone
-- memory digest, open loops, and typed lookups
+- memory digest, open loops, typed lookups, and a structured memory graph payload
 - status and logs
-- plugin-backed integrations including advice, Telegram, skills, and agents
+- repository file browsing with the shared t3 markdown renderer
+- native plugin inventory plus plugin-backed integrations including advice, Telegram, skills, and agents
 
 ## Quick Start
 
@@ -507,6 +509,8 @@ Behavior:
 - Telegram state is stored in `~/.optidev/plugins/telegram-config.json`
 - workspace lifecycle events are appended to `~/.optidev/plugins/telegram-events.jsonl`
 - the active running workspace remains the only Telegram-connected workspace
+- `optid telegram start` without an explicit session pin clears any stale saved target and returns the bridge to auto-target mode
+- an explicit UI-triggered start may pin Telegram to a concrete chat session; otherwise the bridge resolves the best available active session at runtime
 - start/stop/status are available from both the Bun CLI and the embedded `/optidev` UI
 
 Telegram commands inside chat:

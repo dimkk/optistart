@@ -68,6 +68,7 @@ function createProviderServiceHarness() {
     stopSession: () => unsupported(),
     listSessions: () => Effect.succeed([]),
     getCapabilities: () => Effect.succeed({ sessionModelSwitch: "in-session" }),
+    readThread: () => unsupported(),
     rollbackConversation: () => unsupported(),
     streamEvents: Stream.fromPubSub(runtimeEventPubSub),
   };
@@ -593,6 +594,71 @@ describe("ProviderRuntimeIngestion", () => {
     );
     expect(message?.text).toBe("assistant-only final text");
     expect(message?.streaming).toBe(false);
+  });
+
+  it("imports realtime thread items into first-class thread messages", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    harness.emit({
+      type: "thread.realtime.item-added",
+      eventId: asEventId("evt-realtime-user-added"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-realtime"),
+      itemId: asItemId("item-realtime-user"),
+      payload: {
+        item: {
+          type: "userMessage",
+          id: "item-realtime-user",
+          content: [{ type: "text", text: "follow this live session" }],
+        },
+      },
+    });
+    harness.emit({
+      type: "thread.realtime.item-added",
+      eventId: asEventId("evt-realtime-assistant-added"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-realtime"),
+      itemId: asItemId("item-realtime-assistant"),
+      payload: {
+        item: {
+          type: "agentMessage",
+          id: "item-realtime-assistant",
+          text: "live assistant reply",
+        },
+      },
+    });
+
+    const thread = await waitForThread(
+      harness.engine,
+      (entry) =>
+        entry.messages.some(
+          (message: ProviderRuntimeTestMessage) =>
+            message.id === "user:item-realtime-user" &&
+            message.text === "follow this live session",
+        ) &&
+        entry.messages.some(
+          (message: ProviderRuntimeTestMessage) =>
+            message.id === "assistant:item-realtime-assistant" &&
+            message.text === "live assistant reply",
+        ),
+    );
+
+    expect(
+      thread.messages.find(
+        (message: ProviderRuntimeTestMessage) => message.id === "user:item-realtime-user",
+      )?.turnId ?? null,
+    ).toBeNull();
+    expect(
+      thread.messages.find(
+        (message: ProviderRuntimeTestMessage) =>
+          message.id === "assistant:item-realtime-assistant",
+      )?.turnId,
+    ).toBe("turn-realtime");
   });
 
   it("projects completed plan items into first-class proposed plans", async () => {
