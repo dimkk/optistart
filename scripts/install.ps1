@@ -95,7 +95,7 @@ function Ensure-BinDirOnPath {
   }
 }
 
-function Install-BunDepsAndBuild($RepoDir) {
+function Install-SourceRuntime($RepoDir) {
   $uiDir = Join-Path $RepoDir "ui"
   if (-not (Test-Path (Join-Path $uiDir "package.json"))) {
     Fail "missing ui/package.json"
@@ -107,10 +107,28 @@ function Install-BunDepsAndBuild($RepoDir) {
     exit $LASTEXITCODE
   }
 
-  Write-Host "Building bundled UI in: $uiDir"
+  Write-Host "Building runtime assets in: $uiDir"
   Push-Location $uiDir
   try {
-    & bun run build
+    & bun run build:runtime
+    if ($LASTEXITCODE -ne 0) {
+      exit $LASTEXITCODE
+    }
+  } finally {
+    Pop-Location
+  }
+}
+
+function Install-ReleaseRuntimeDeps($RepoDir) {
+  $serverDir = Join-Path $RepoDir "ui\apps\server"
+  if (-not (Test-Path (Join-Path $serverDir "package.json"))) {
+    Fail "missing ui/apps/server/package.json"
+  }
+
+  Write-Host "Installing production server dependencies in: $serverDir"
+  Push-Location $serverDir
+  try {
+    & npm install --omit=dev --no-fund --no-audit
     if ($LASTEXITCODE -ne 0) {
       exit $LASTEXITCODE
     }
@@ -129,31 +147,25 @@ function Install-ReleaseSnapshot {
   $version = if ($env:OPTID_VERSION) { $env:OPTID_VERSION } else { $manifest.version }
   $releaseDir = Join-Path $InstallRoot "releases\v$version"
   $currentDir = Join-Path $InstallRoot "current"
-  $zipUrl = "$($manifest.install.archiveBaseUrl)/v$version.zip"
+  $bundleUrl = "$($manifest.install.bundleBaseUrl)/v$version/optid-$version.tar.gz"
 
   if (-not (Test-Path $releaseDir)) {
     $tempDir = Join-Path ([System.IO.Path]::GetTempPath()) ("optid-release-" + [System.Guid]::NewGuid())
-    $zipPath = Join-Path $tempDir "optid-release.zip"
+    $tarPath = Join-Path $tempDir "optid-release.tar.gz"
     New-Item -ItemType Directory -Force -Path $tempDir | Out-Null
     New-Item -ItemType Directory -Force -Path $releaseDir | Out-Null
 
-    Write-Host "Downloading release archive: $zipUrl"
-    Invoke-WebRequest -Uri $zipUrl -OutFile $zipPath -UseBasicParsing
-    Expand-Archive -Path $zipPath -DestinationPath $tempDir -Force
-
-    $expandedRoot = Get-ChildItem $tempDir -Directory | Where-Object { $_.Name -ne "releases" } | Select-Object -First 1
-    if (-not $expandedRoot) {
-      Fail "failed to extract release archive"
-    }
-
-    Get-ChildItem $expandedRoot.FullName -Force | ForEach-Object {
-      Move-Item $_.FullName $releaseDir -Force
+    Write-Host "Downloading release archive: $bundleUrl"
+    Invoke-WebRequest -Uri $bundleUrl -OutFile $tarPath -UseBasicParsing
+    & tar -xzf $tarPath -C $releaseDir --strip-components=1
+    if ($LASTEXITCODE -ne 0) {
+      exit $LASTEXITCODE
     }
   } else {
     Write-Host "Using existing release directory: $releaseDir"
   }
 
-  Install-BunDepsAndBuild $releaseDir
+  Install-ReleaseRuntimeDeps $releaseDir
 
   New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
   if (Test-Path $currentDir) {
@@ -209,7 +221,7 @@ function Install-BranchSnapshot {
     Move-Item $_.FullName $branchDir -Force
   }
 
-  Install-BunDepsAndBuild $branchDir
+  Install-SourceRuntime $branchDir
 
   New-Item -ItemType Directory -Force -Path $InstallRoot | Out-Null
   New-Item -ItemType Junction -Path $currentDir -Target $branchDir | Out-Null
@@ -229,38 +241,41 @@ function Write-WindowsShim {
   @"
 @echo off
 setlocal
-where bun >nul 2>nul
+where node >nul 2>nul
 if errorlevel 1 (
-  echo optid error: missing required command: bun 1>&2
+  echo optid error: missing required command: node 1>&2
   exit /b 1
 )
-bun "$CurrentDir\scripts\optid-runner.mjs" --root "$CurrentDir" %*
+node "$CurrentDir\scripts\optid-runner.mjs" --root "$CurrentDir" %*
 exit /b %errorlevel%
 "@ | Set-Content -Path $cmdPath -Encoding ASCII
 
   @"
 \$ErrorActionPreference = "Stop"
-if (-not (Get-Command bun -ErrorAction SilentlyContinue)) {
-  Write-Error "optid error: missing required command: bun"
+if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+  Write-Error "optid error: missing required command: node"
   exit 1
 }
-& bun "$CurrentDir\scripts\optid-runner.mjs" --root "$CurrentDir" @args
+& node "$CurrentDir\scripts\optid-runner.mjs" --root "$CurrentDir" @args
 exit \$LASTEXITCODE
 "@ | Set-Content -Path $ps1Path -Encoding ASCII
 }
 
-Require-Command bun
 Require-Command node
 
 $repoDir = Resolve-LocalRepo
 if ($repoDir) {
+  Require-Command bun
   Write-Host "Using local repository: $repoDir"
-  Install-BunDepsAndBuild $repoDir
+  Install-SourceRuntime $repoDir
 } else {
   if ($GitRef) {
+    Require-Command bun
     Write-Host "Installing branch snapshot: $GitRef"
     $repoDir = Install-BranchSnapshot -ManifestUrl $ManifestUrl -InstallRoot $InstallRoot -GitRef $GitRef
   } else {
+    Require-Command npm
+    Require-Command tar
     $repoDir = Install-ReleaseSnapshot -ManifestUrl $ManifestUrl -InstallRoot $InstallRoot
   }
 }

@@ -240,12 +240,59 @@ export function parseLatestTagFromLsRemoteOutput(stdout) {
 
 export function resolveReleaseArchiveUrl(manifest, version) {
   const tag = normalizeTag(version);
-  return `${manifest.install.archiveBaseUrl}/${tag}.tar.gz`;
+  return `${manifest.install.bundleBaseUrl}/${tag}/${buildReleaseBundleFileName(version)}`;
 }
 
 export function resolveReleaseZipUrl(manifest, version) {
   const tag = normalizeTag(version);
-  return `${manifest.install.archiveBaseUrl}/${tag}.zip`;
+  return `${manifest.install.bundleBaseUrl}/${tag}/${buildReleaseBundleFileName(version)}`;
+}
+
+export function buildReleaseBundleFileName(version) {
+  return `optid-${version}.tar.gz`;
+}
+
+export function buildReleaseServerPackageJson({ rootPackageJson, serverPackageJson, version }) {
+  parseSemver(version);
+  const catalog = rootPackageJson?.workspaces?.catalog;
+  if (typeof catalog !== "object" || catalog === null) {
+    throw new ReleaseError("missing workspace catalog in ui/package.json", {
+      code: "INVALID_WORKSPACE_CATALOG",
+    });
+  }
+
+  const dependencies = Object.fromEntries(
+    Object.entries(serverPackageJson.dependencies ?? {}).map(([name, spec]) => {
+      if (typeof spec !== "string" || !spec.startsWith("catalog:")) {
+        return [name, spec];
+      }
+
+      const catalogKey = spec.slice("catalog:".length).trim();
+      const lookupKey = catalogKey.length > 0 ? catalogKey : name;
+      const resolved = catalog[lookupKey];
+      if (typeof resolved !== "string" || resolved.length === 0) {
+        throw new ReleaseError(`missing catalog dependency '${lookupKey}' for '${name}'`, {
+          code: "INVALID_WORKSPACE_CATALOG",
+        });
+      }
+      return [name, resolved];
+    }),
+  );
+
+  return {
+    name: serverPackageJson.name,
+    version,
+    repository: serverPackageJson.repository,
+    type: serverPackageJson.type,
+    private: true,
+    engines: serverPackageJson.engines,
+    files: ["dist"],
+    scripts: {
+      start: "node dist/index.mjs",
+      "optidev:cli": "node dist/optidevCli.mjs",
+    },
+    dependencies,
+  };
 }
 
 export function buildUpdateSuggestion({ currentVersion, latestVersion, manifest }) {

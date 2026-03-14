@@ -10,9 +10,9 @@ done
 ROOT_DIR="$(cd -P "$(dirname "$SOURCE")" && pwd)"
 ROOT_DIR="$(cd -P "$ROOT_DIR/.." && pwd)"
 
-if ! command -v bun >/dev/null 2>&1; then
-  printf 'optid error: missing required command: bun\n' >&2
+if ! command -v node >/dev/null 2>&1; then
+  printf 'optid error: missing required command: node\n' >&2
   exit 1
 fi
 
-exec bun "$ROOT_DIR/scripts/optid-runner.mjs" --root "$ROOT_DIR" "$@"
+exec node "$ROOT_DIR/scripts/optid-runner.mjs" --root "$ROOT_DIR" "$@"
