@@ -23,7 +23,7 @@ require_cmd() {
   command -v "$1" >/dev/null 2>&1 || fail "missing required command: $1"
 }
 
-install_bun_deps() {
+install_source_runtime() {
   local repo_dir="$1"
   local ui_dir="$repo_dir/ui"
 
@@ -33,8 +33,18 @@ install_bun_deps() {
   printf 'Installing Bun workspace dependencies in: %s\n' "$ui_dir"
   bun install --cwd "$ui_dir" --frozen-lockfile --ignore-scripts
 
-  printf 'Building bundled UI in: %s\n' "$ui_dir"
-  (cd "$ui_dir" && bun run build)
+  printf 'Building runtime assets in: %s\n' "$ui_dir"
+  (cd "$ui_dir" && bun run build:runtime)
+}
+
+install_release_runtime_deps() {
+  local repo_dir="$1"
+  local server_dir="$repo_dir/ui/apps/server"
+
+  [[ -f "$server_dir/package.json" ]] || fail "missing ui/apps/server/package.json"
+
+  printf 'Installing production server dependencies in: %s\n' "$server_dir"
+  (cd "$server_dir" && npm install --omit=dev --no-fund --no-audit)
 }
 
 resolve_local_repo() {
@@ -107,10 +117,19 @@ print_profile_instructions() {
 }
 
 require_build_cmds() {
-  require_cmd bun
   require_cmd curl
   require_cmd tar
   require_cmd node
+}
+
+require_source_build_cmds() {
+  require_build_cmds
+  require_cmd bun
+}
+
+require_release_install_cmds() {
+  require_build_cmds
+  require_cmd npm
 }
 
 fetch_release_manifest() {
@@ -125,7 +144,7 @@ sanitize_ref_name() {
 json_field() {
   local file="$1"
   local expression="$2"
-  bun -e "const data = JSON.parse(require('node:fs').readFileSync(process.argv[1], 'utf8')); const value = ${expression}; if (value === undefined || value === null) process.exit(1); process.stdout.write(String(value));" "$file"
+  node -e "const data = JSON.parse(require('node:fs').readFileSync(process.argv[1], 'utf8')); const value = ${expression}; if (value === undefined || value === null) process.exit(1); process.stdout.write(String(value));" "$file"
 }
 
 resolve_release_version() {
@@ -140,9 +159,9 @@ resolve_release_version() {
 resolve_release_archive_url() {
   local manifest_file="$1"
   local version="$2"
-  local archive_base_url
-  archive_base_url="$(json_field "$manifest_file" "data.install.archiveBaseUrl")"
-  printf '%s/v%s.tar.gz' "$archive_base_url" "$version"
+  local bundle_base_url
+  bundle_base_url="$(json_field "$manifest_file" "data.install.bundleBaseUrl")"
+  printf '%s/v%s/optid-%s.tar.gz' "$bundle_base_url" "$version" "$version"
 }
 
 install_remote_release() {
@@ -168,7 +187,7 @@ install_remote_release() {
     printf 'Using existing release directory: %s\n' "$release_dir"
   fi
 
-  install_bun_deps "$release_dir"
+  install_release_runtime_deps "$release_dir"
   mkdir -p "$INSTALL_ROOT"
   ln -sfn "$release_dir" "$current_link"
   printf '%s' "$current_link"
@@ -212,30 +231,32 @@ install_remote_branch_snapshot() {
   mkdir -p "$branch_dir"
   tar -xzf "$archive_path" -C "$branch_dir" --strip-components=1
 
-  install_bun_deps "$branch_dir"
+  install_source_runtime "$branch_dir"
   mkdir -p "$INSTALL_ROOT"
   ln -sfn "$branch_dir" "$current_link"
   printf '%s' "$current_link"
 }
 
 main() {
-  require_build_cmds
-
   local repo_dir
   local should_bootstrap_repo=1
   repo_dir="$(resolve_local_repo)"
 
   if [[ -n "$repo_dir" ]]; then
+    require_source_build_cmds
     printf 'Using local repository: %s\n' "$repo_dir"
   else
     local manifest_file version archive_url
     manifest_file="$(mktemp)"
+    require_build_cmds
     fetch_release_manifest "$manifest_file"
     if [[ -n "$GIT_REF" ]]; then
+      require_source_build_cmds
       archive_url="$(resolve_branch_archive_url "$manifest_file" "$GIT_REF")"
       printf 'Installing branch snapshot: %s\n' "$GIT_REF"
       repo_dir="$(install_remote_branch_snapshot "$manifest_file" "$GIT_REF" "$archive_url")"
     else
+      require_release_install_cmds
       version="$(resolve_release_version "$manifest_file")"
       archive_url="$(resolve_release_archive_url "$manifest_file" "$version")"
       printf 'Installing release version: v%s\n' "$version"
@@ -246,7 +267,7 @@ main() {
 
   [[ -f "$repo_dir/scripts/optid" && -d "$repo_dir/ui/apps/server" ]] || fail "invalid repository layout"
   if [[ "$should_bootstrap_repo" -eq 1 ]]; then
-    install_bun_deps "$repo_dir"
+    install_source_runtime "$repo_dir"
   fi
 
   mkdir -p "$BIN_DIR"

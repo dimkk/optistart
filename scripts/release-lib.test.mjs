@@ -5,6 +5,8 @@ import os from "node:os";
 import path from "node:path";
 
 import {
+  buildReleaseBundleFileName,
+  buildReleaseServerPackageJson,
   RELEASE_MANIFEST_PATH,
   buildUpdateSuggestion,
   bumpChannelVersion,
@@ -72,7 +74,7 @@ test("release manifest read/write and package syncing use one source of truth", 
         gitUrl: "https://github.com/dimkk/optistart.git",
       },
       install: {
-        archiveBaseUrl: "https://github.com/dimkk/optistart/archive/refs/tags",
+        bundleBaseUrl: "https://github.com/dimkk/optistart/releases/download",
         unixScriptUrl: "https://example.invalid/install.sh",
         windowsScriptUrl: "https://example.invalid/install.ps1",
       },
@@ -113,7 +115,7 @@ test("release manifest read/write and package syncing use one source of truth", 
     assert.equal(serverPackage.version, "0.0.4");
     assert.equal(
       resolveReleaseArchiveUrl(savedManifest, savedManifest.version),
-      "https://github.com/dimkk/optistart/archive/refs/tags/v0.0.4.tar.gz",
+      "https://github.com/dimkk/optistart/releases/download/v0.0.4/optid-0.0.4.tar.gz",
     );
 
     const suggestion = buildUpdateSuggestion({
@@ -143,4 +145,44 @@ test("buildUpdateSuggestion uses shell-appropriate install commands", () => {
 
   assert.match(suggestion, /curl -fsSL https:\/\/example\.invalid\/install\.sh \| bash/);
   assert.match(suggestion, /irm https:\/\/example\.invalid\/install\.ps1 \| iex/);
+});
+
+test("buildReleaseBundleFileName uses the shipped version", () => {
+  assert.equal(buildReleaseBundleFileName("0.0.4"), "optid-0.0.4.tar.gz");
+});
+
+test("buildReleaseServerPackageJson resolves catalog dependencies for installed runtime", () => {
+  const releasePackage = buildReleaseServerPackageJson({
+    version: "0.0.4",
+    rootPackageJson: {
+      workspaces: {
+        catalog: {
+          effect: "1.2.3",
+          "@effect/platform-node": "2.3.4",
+          "@effect/sql-sqlite-bun": "3.4.5",
+        },
+      },
+    },
+    serverPackageJson: {
+      name: "t3",
+      repository: { type: "git", url: "https://example.invalid/repo.git" },
+      type: "module",
+      engines: { node: ">=24" },
+      dependencies: {
+        effect: "catalog:",
+        "@effect/platform-node": "catalog:",
+        "@effect/sql-sqlite-bun": "catalog:",
+        open: "^10.1.0",
+      },
+    },
+  });
+
+  assert.deepEqual(releasePackage.dependencies, {
+    effect: "1.2.3",
+    "@effect/platform-node": "2.3.4",
+    "@effect/sql-sqlite-bun": "3.4.5",
+    open: "^10.1.0",
+  });
+  assert.equal(releasePackage.scripts.start, "node dist/index.mjs");
+  assert.equal(releasePackage.scripts["optidev:cli"], "node dist/optidevCli.mjs");
 });

@@ -1,5 +1,3 @@
-#!/usr/bin/env bun
-
 import path from "node:path";
 
 import type { OptiDevRouteContext } from "./optidevContract";
@@ -275,6 +273,12 @@ export async function runOptiDevCli(
 }
 
 if (import.meta.main) {
-  const exitCode = await runOptiDevCli(process.argv.slice(2));
-  process.exit(exitCode);
+  runOptiDevCli(process.argv.slice(2))
+    .then((exitCode) => {
+      process.exit(exitCode);
+    })
+    .catch((error) => {
+      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+      process.exit(1);
+    });
 }

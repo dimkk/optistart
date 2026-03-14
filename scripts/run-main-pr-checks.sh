@@ -19,6 +19,8 @@ printf '==> Running repository-owned script tests\n'
 (
   cd "$ROOT_DIR"
   node --test scripts/release-lib.test.mjs scripts/optid-launcher-lib.test.mjs scripts/t3code-sync.test.mjs
+  node --check scripts/build-release-bundle.mjs
+  node --check scripts/optid-runner.mjs
 )
 
 printf '==> Verifying repository layout and launcher shims\n'

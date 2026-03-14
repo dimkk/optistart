@@ -7,7 +7,7 @@
     "gitUrl": "https://github.com/dimkk/optistart.git"
   },
   "install": {
-    "archiveBaseUrl": "https://github.com/dimkk/optistart/archive/refs/tags",
+    "bundleBaseUrl": "https://github.com/dimkk/optistart/releases/download",
     "unixScriptUrl": "https://raw.githubusercontent.com/dimkk/optistart/main/scripts/install.sh",
     "windowsScriptUrl": "https://raw.githubusercontent.com/dimkk/optistart/main/scripts/install.ps1"
   },
