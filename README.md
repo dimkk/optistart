@@ -2,7 +2,7 @@
 
 A local CLI workspace orchestrator for AI coding sessions.
 
-Install:
+Fast install:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/dimkk/optistart/main/scripts/install.sh | bash
@@ -32,10 +32,10 @@ Available commands:
 - `optid t3code [status|bootstrap|refresh]`
 - `optid runner ls`
 - `optid runner resume <id>`
-- `optid start <project> [--advice]`
-- `optid start [--advice]` (from current project directory)
+- `optid start <project> [--no-advice]`
+- `optid start [--no-advice]` (from current project directory)
 - `optid init <name|.>`
-- `optid go <name|.> [--advice]` (init + start in one command)
+- `optid go <name|.> [--no-advice]` (init + start in one command)
 - `optid resume [project|.]`
 - `optid reset [project|.]`
 - `optid workspace clone <name>`
@@ -62,7 +62,7 @@ Implemented subsystems:
 - dev/tests/log hooks execution
 - plugin lifecycle (`start`, `message`, `stop`)
 - native Bun CLI and forked `t3` runtime sharing one TS/Bun workspace core
-- plugin startup augmentation for features like `--advice`
+- plugin startup augmentation for default startup advice and related bootstrap features
 - plugin-driven workspace bootstrap with tabs for chat, editor, logs, and tests
 - upstream `t3code` fork embedded under `./ui/`, with OptiDev wired into the forked web/server runtime
 
@@ -229,23 +229,50 @@ The forked OptiDev route exposes:
 
 ## Quick Start
 
+Stable install:
+
 ```bash
-optid
-optid ui
+curl -fsSL https://raw.githubusercontent.com/dimkk/optistart/main/scripts/install.sh | bash
+```
+
+Then verify the install and open the UI:
+
+```bash
 optid --version
-optid t3code status
-optid t3code refresh --dry-run --allow-dirty
-optid go demo --advice
-optid telegram start
-optid start demo
-optid resume demo
-optid workspace clone feature-x
-optid skills search react
-optid agents search code
+optid
+```
+
+Start in the current directory:
+
+```bash
+optid start
+```
+
+Start from an empty folder:
+
+```bash
+mkdir demo
+cd demo
+optid start
+```
+
+Useful next commands:
+
+```bash
 optid status
+optid runner ls
+optid workspace clone feature-x
 optid logs
 optid stop
 ```
+
+Telegram is not part of the zero-config quick start. It needs explicit credentials:
+
+```bash
+optid telegram start --token <token> --chat-id <chat-id>
+```
+
+`optid start` and `optid go` enable startup advice by default. Use `--no-advice` when you want a quieter bootstrap.
 
 If your shell has not reloaded PATH yet, use:
 
@@ -469,7 +496,7 @@ The shipped OptiDev product now exposes built-in native integrations from the TS
 
 Current native integrations:
 
-- `optid advice` and `start/go --advice` for repository bootstrap guidance
+- `optid advice` and the default startup advice injected by `optid start/go`
 - `optid telegram start|stop|status` for Telegram lifecycle mirroring
 - `optid skills search|install` for project-local skill discovery under `.agents/skills`
 - `optid agents search|install` for project-local agent discovery under `.agents/agents`
@@ -540,16 +567,22 @@ Notes:
 
 ## Advice Mode
 
-Use:
+Default behavior:
 
 ```bash
-optid start <project> --advice
+optid start <project>
 ```
 
 or:
 
 ```bash
-optid go <project> --advice
+optid go <project>
+```
+
+Opt out when you want a quieter bootstrap:
+
+```bash
+optid start <project> --no-advice
 ```
 
 Behavior:

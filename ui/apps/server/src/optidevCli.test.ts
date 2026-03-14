@@ -46,7 +46,7 @@ describe("optidevCli", () => {
     }
   });
 
-  it("starts and resumes a project through the native CLI runtime", async () => {
+  it("starts and resumes a project through the native CLI runtime with advice enabled by default", async () => {
     const repoRoot = makeTempDir("optidev-cli-root-");
     const homeDir = makeTempDir("optidev-cli-home-");
     const projectDir = path.join(homeDir, "projects", "demo");
@@ -60,7 +60,7 @@ describe("optidevCli", () => {
     );
     fs.writeFileSync(path.join(homeDir, "config.yaml"), "mux_backend: textual\ndefault_runner: claude\n", "utf8");
 
-    const started = await runOptiDevCli(["start", "demo", "--advice"], runtime);
+    const started = await runOptiDevCli(["start", "demo"], runtime);
     const resumed = await runOptiDevCli(["resume", "demo"], runtime);
 
     expect(started).toBe(0);
@@ -68,10 +68,33 @@ describe("optidevCli", () => {
     expect(readStderr()).toBe("");
     expect(readStdout()).toContain("OptiDev workspace ready.");
     expect(readStdout()).toContain("Runner ready: claude.");
+    expect(readStdout()).toContain("Advice mode: startup repo analysis prompt queued for the runner.");
     expect(readStdout()).toContain("Session restored.");
     expect(readStdout()).toContain("Open /optidev in the forked t3 UI.");
     expect(fs.existsSync(path.join(homeDir, "sessions", "demo", "session.json"))).toBe(true);
     expect(fs.existsSync(path.join(projectDir, ".optidev", "session.json"))).toBe(true);
+  });
+
+  it("supports --no-advice for quieter startup", async () => {
+    const repoRoot = makeTempDir("optidev-cli-root-");
+    const homeDir = makeTempDir("optidev-cli-home-");
+    const projectDir = path.join(homeDir, "projects", "demo");
+    const { runtime, readStdout, readStderr } = makeRuntime(homeDir, repoRoot);
+
+    fs.mkdirSync(path.join(projectDir, ".project"), { recursive: true });
+    fs.writeFileSync(
+      path.join(projectDir, ".project", "config.yaml"),
+      JSON.stringify({ dev: { start: [] }, tests: { command: null, watch: [] }, logs: { sources: [] } }, null, 2),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(homeDir, "config.yaml"), "mux_backend: textual\ndefault_runner: claude\n", "utf8");
+
+    const started = await runOptiDevCli(["start", "demo", "--no-advice"], runtime);
+
+    expect(started).toBe(0);
+    expect(readStderr()).toBe("");
+    expect(readStdout()).toContain("OptiDev workspace ready.");
+    expect(readStdout()).not.toContain("Advice mode: startup repo analysis prompt queued for the runner.");
   });
 
   it("handles telegram lifecycle commands through the native CLI runtime", async () => {

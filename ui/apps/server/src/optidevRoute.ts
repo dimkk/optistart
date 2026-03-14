@@ -87,6 +87,10 @@ function normalizePayload(payload: OptiDevActionPayload, context: OptiDevRouteCo
   };
 }
 
+function resolveAdviceFlag(payload: OptiDevActionPayload): boolean {
+  return payload.advice === undefined ? true : Boolean(payload.advice);
+}
+
 async function resolveActionCwd(
   context: OptiDevRouteContext,
   payload: OptiDevActionPayload,
@@ -201,7 +205,7 @@ async function runOptiDevAction(
       return await nativeStartAction(
         context,
         await resolveActionCwd(context, payload),
-        Boolean(normalizedPayload.advice),
+        resolveAdviceFlag(normalizedPayload),
       );
     } catch (error) {
       return toErrorResponse(error, "Failed to start OptiDev workspace.");
@@ -225,7 +229,7 @@ async function runOptiDevAction(
         context,
         normalizedPayload.target ?? ".",
         normalizedPayload.cwd ?? resolveOptiDevProjectRoot(context.cwd),
-        Boolean(normalizedPayload.advice),
+        resolveAdviceFlag(normalizedPayload),
       );
     } catch (error) {
       return toErrorResponse(error, "Failed to bootstrap OptiDev workspace.");
