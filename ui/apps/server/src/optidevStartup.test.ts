@@ -26,7 +26,7 @@ describe("optidevStartup", () => {
     }
   });
 
-  it("starts a project natively with runner bootstrap, layout, and local session state", async () => {
+  it("starts a project natively with advice-enabled bootstrap, layout, and local session state", async () => {
     const repoRoot = makeTempDir("optidev-startup-root-");
     const homeDir = makeTempDir("optidev-startup-home-");
     const projectPath = path.join(homeDir, "projects", "demo");
@@ -38,7 +38,7 @@ describe("optidevStartup", () => {
     fs.writeFileSync(path.join(projectPath, ".agents", "agents", "reviewer.md"), "# reviewer\n", "utf8");
     fs.writeFileSync(path.join(homeDir, "config.yaml"), "mux_backend: textual\ndefault_runner: claude\n", "utf8");
 
-    const result = await nativeStartAction(context, projectPath, true, {
+    const result = await nativeStartAction(context, projectPath, undefined, {
       now: () => "2026-03-08T12:00:00.000Z",
     });
 
@@ -94,6 +94,7 @@ describe("optidevStartup", () => {
     const resumed = await nativeResumeAction(context, projectPath);
     expect(resumed.ok).toBe(true);
     expect(resumed.lines.join("\n")).toContain("Session restored.");
+    expect(resumed.lines.join("\n")).not.toContain("Advice mode was requested");
   });
 
   it("go initializes and starts through the native TS path", async () => {
@@ -110,5 +111,26 @@ describe("optidevStartup", () => {
     expect(result.lines.join("\n")).toContain("OptiDev workspace ready.");
     expect(fs.existsSync(path.join(repoRoot, "demo", ".project", "config.yaml"))).toBe(true);
     expect(fs.existsSync(path.join(repoRoot, "demo", ".optidev", "session.json"))).toBe(true);
+    expect(result.lines.join("\n")).toContain("Advice mode: startup repo analysis prompt queued for the runner.");
+  });
+
+  it("supports opting out of default advice", async () => {
+    const repoRoot = makeTempDir("optidev-startup-root-");
+    const homeDir = makeTempDir("optidev-startup-home-");
+    const projectPath = path.join(homeDir, "projects", "demo");
+    const context = makeContext(homeDir, repoRoot);
+
+    fs.mkdirSync(path.join(projectPath, ".project"), { recursive: true });
+    fs.writeFileSync(
+      path.join(projectPath, ".project", "config.yaml"),
+      JSON.stringify({ dev: { start: [] }, tests: { command: null, watch: [] }, logs: { sources: [] } }, null, 2),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(homeDir, "config.yaml"), "mux_backend: textual\ndefault_runner: claude\n", "utf8");
+
+    const result = await nativeStartAction(context, projectPath, false);
+
+    expect(result.ok).toBe(true);
+    expect(result.lines.join("\n")).not.toContain("Advice mode: startup repo analysis prompt queued for the runner.");
   });
 });

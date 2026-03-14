@@ -15,6 +15,7 @@ The command surface must be deterministic and callable from terminal entrypoint.
 - Command surface implemented:
   - start: `optid <project>`
   - service commands: `stop`, `status`, `logs`, `projects`
+- `optid start` and `optid go` now enable startup repo advice by default, with `--no-advice` as the explicit opt-out.
 - Workspace state persisted in `~/.optidev` (or `OPTIDEV_HOME` override).
 - Runtime/session behavior is shared with the native TS/Bun `/optidev` route instead of a separate Python CLI core.
 - Test suite is colocated in the forked server layer via `optidevCli.test.ts` and `optidevCliShim.test.ts`.

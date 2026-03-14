@@ -980,7 +980,7 @@ describe("optidevRoute", () => {
     });
   });
 
-  it("serves native start and resume actions without fallback", async () => {
+  it("serves native start and resume actions with advice enabled by default", async () => {
     const { uiRoot } = createMockRepoRoot();
     const homeDir = makeTempDir("optidev-native-home-");
     const projectPath = path.join(homeDir, "projects", "demo");
@@ -997,7 +997,7 @@ describe("optidevRoute", () => {
       const start = await fetch(`${baseUrl}/api/optidev/action`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "start", target: "demo", advice: true }),
+        body: JSON.stringify({ action: "start", target: "demo" }),
       });
       const resume = await fetch(`${baseUrl}/api/optidev/action`, {
         method: "POST",
@@ -1012,10 +1012,12 @@ describe("optidevRoute", () => {
       expect(startBody.ok).toBe(true);
       expect(startBody.lines.join("\n")).toContain("OptiDev workspace ready.");
       expect(startBody.lines.join("\n")).toContain("Runner ready: claude.");
+      expect(startBody.lines.join("\n")).toContain("Advice mode: startup repo analysis prompt queued for the runner.");
       expect(fs.existsSync(path.join(homeDir, "sessions", "demo", "runner.json"))).toBe(true);
       expect(resume.status).toBe(200);
       expect(resumeBody.ok).toBe(true);
       expect(resumeBody.lines.join("\n")).toContain("Session restored.");
+      expect(resumeBody.lines.join("\n")).not.toContain("Advice mode was requested");
     });
   });
 
@@ -1080,7 +1082,35 @@ describe("optidevRoute", () => {
       expect(body.ok).toBe(true);
       expect(body.lines.join("\n")).toContain("Initialized project 'demo'");
       expect(body.lines.join("\n")).toContain("OptiDev workspace ready.");
+      expect(body.lines.join("\n")).toContain("Advice mode: startup repo analysis prompt queued for the runner.");
       expect(fs.existsSync(path.join(repoRoot, "demo", ".project", "config.yaml"))).toBe(true);
+    });
+  });
+
+  it("allows route callers to disable default advice explicitly", async () => {
+    const { uiRoot } = createMockRepoRoot();
+    const homeDir = makeTempDir("optidev-native-home-");
+    const projectPath = path.join(homeDir, "projects", "demo");
+
+    fs.mkdirSync(path.join(projectPath, ".project"), { recursive: true });
+    fs.writeFileSync(
+      path.join(projectPath, ".project", "config.yaml"),
+      JSON.stringify({ dev: { start: [] }, tests: { command: null, watch: [] }, logs: { sources: [] } }, null, 2),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(homeDir, "config.yaml"), "mux_backend: textual\ndefault_runner: claude\n", "utf8");
+
+    await withRouteServer({ cwd: uiRoot, homeDir }, async (baseUrl) => {
+      const start = await fetch(`${baseUrl}/api/optidev/action`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "start", target: "demo", advice: false }),
+      });
+      const startBody = (await start.json()) as { ok: boolean; lines: string[] };
+
+      expect(start.status).toBe(200);
+      expect(startBody.ok).toBe(true);
+      expect(startBody.lines.join("\n")).not.toContain("Advice mode: startup repo analysis prompt queued for the runner.");
     });
   });
 

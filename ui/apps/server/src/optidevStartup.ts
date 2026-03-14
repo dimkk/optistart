@@ -708,9 +708,6 @@ async function startResolvedProject(
   }
   if (state.restored) {
     lines.push("Session restored.");
-    if (advice) {
-      lines.push("Advice mode was requested, but the session was restored. Restart the workspace to inject the startup advice prompt.");
-    }
   }
   if (hooks.length > 0) {
     lines.push(`Hooks started: ${hooks.length}.`);
@@ -725,7 +722,7 @@ async function startResolvedProject(
 export async function nativeStartAction(
   context: OptiDevRouteContext,
   projectDir: string,
-  advice = false,
+  advice = true,
   deps: Partial<StartupDeps> = {},
 ): Promise<OptiDevActionResponse> {
   return startResolvedProject(context, path.resolve(projectDir), advice, false, deps);
@@ -743,7 +740,7 @@ export async function nativeGoAction(
   context: OptiDevRouteContext,
   target: string,
   cwd: string,
-  advice = false,
+  advice = true,
   deps: Partial<StartupDeps> = {},
 ): Promise<OptiDevActionResponse> {
   const initResult = await nativeInitAction(context, target, cwd);

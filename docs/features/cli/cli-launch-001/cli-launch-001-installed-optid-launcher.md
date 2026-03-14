@@ -8,6 +8,7 @@ Ship one stable `optid` entrypoint that can launch the bundled `t3code` + OptiDe
 - `optid` with no arguments starts the bundled `t3code` server/UI stack from the installed or local release layout.
 - `optid ui` is an explicit alias for the same bundled UI startup path.
 - `optid status`, `optid start`, `optid memory`, and other CLI subcommands still delegate to the native TS/Bun OptiDev CLI in `ui/apps/server/src/optidevCli.ts`.
+- `optid start` is the primary bootstrap entry command for a repo root or an empty folder, while machine-local Codex attach remains available from the integrated UI sidebar after startup.
 - `optid --version` and `optid version` print the shipped product version from `scripts/release-manifest.json`.
 - The launcher builds the bundled UI on demand if the built server/web assets are missing.
 - Installers expose this launcher through:

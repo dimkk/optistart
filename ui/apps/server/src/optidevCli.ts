@@ -25,8 +25,8 @@ import {
 import { nativeRunnerListAction, nativeRunnerResumeAction } from "./optidevRunner";
 
 const USAGE =
-  "Usage: optid start [project|.] [--advice] | " +
-  "optid [init <name|.>|go <name|.> [--advice]|resume [project|.]|reset [project|.]|" +
+  "Usage: optid start [project|.] [--no-advice] | " +
+  "optid [init <name|.>|go <name|.> [--no-advice]|resume [project|.]|reset [project|.]|" +
   "workspace clone <name>|memory [show <kind> <id>|open-loops]|runner <ls|resume <id>>|stop|status|logs|projects|" +
   "telegram|skills|agents|advice]";
 
@@ -69,10 +69,14 @@ function parseTargetAndAdvice(
   defaultTarget: string | null,
 ): { target: string | null; advice: boolean } | null {
   let target = defaultTarget;
-  let advice = false;
+  let advice = true;
   for (const arg of args) {
     if (arg === "--advice") {
       advice = true;
+      continue;
+    }
+    if (arg === "--no-advice") {
+      advice = false;
       continue;
     }
     if (target === null) {
