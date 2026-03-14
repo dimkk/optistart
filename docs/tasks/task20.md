@@ -6,6 +6,7 @@
 
 ## architecture
 - Move server PTY adapter selection behind a runtime-resolved layer instead of static eager imports.
+- Move `node-pty` loading inside the Node PTY adapter spawn path so constructing the server layer never requires native PTY support up front.
 - Prefer Bun PTY when the runtime exposes Bun terminal support.
 - On non-Bun runtimes, try loading the Node PTY adapter dynamically.
 - If `node-pty` cannot load, provide an explicit unavailable PTY adapter that fails only on `terminal.open` instead of crashing unrelated server startup and tests.
@@ -17,7 +18,9 @@
 
 ## test plan
 - Add/extend unit coverage for PTY adapter selection fallback.
+- Add/extend unit coverage proving the Node PTY service itself only loads native support on `spawn`.
 - Run targeted server tests covering the release blocker:
+  - `ui/apps/server/src/terminal/Layers/NodePTY.test.ts`
   - `ui/apps/server/src/serverLayers.test.ts`
   - `ui/apps/server/src/main.test.ts`
   - `ui/apps/server/src/wsServer.test.ts`

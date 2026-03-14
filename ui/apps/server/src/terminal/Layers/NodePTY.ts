@@ -1,9 +1,17 @@
 import { createRequire } from "node:module";
 
 import { Effect, FileSystem, Layer, Path } from "effect";
-import { PtyAdapter, PtyAdapterShape, PtyExitEvent, PtyProcess } from "../Services/PTY";
+import {
+  PtyAdapter,
+  PtyAdapterShape,
+  PtyExitEvent,
+  PtyProcess,
+  PtySpawnError,
+} from "../Services/PTY";
 
 let didEnsureSpawnHelperExecutable = false;
+
+type LoadNodePtyModule = () => Promise<typeof import("node-pty")>;
 
 const resolveNodePtySpawnHelperPath = Effect.gen(function* () {
   const requireForNodePty = createRequire(import.meta.url);
@@ -84,34 +92,51 @@ class NodePtyProcess implements PtyProcess {
   }
 }
 
-export const NodePtyAdapterLive = Layer.effect(
-  PtyAdapter,
-  Effect.gen(function* () {
-    const fs = yield* FileSystem.FileSystem;
-    const path = yield* Path.Path;
+export function makeNodePtyAdapterLive(
+  loadNodePty: LoadNodePtyModule = () => import("node-pty"),
+) {
+  return Layer.effect(
+    PtyAdapter,
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
 
-    const nodePty = yield* Effect.promise(() => import("node-pty"));
+      const ensureNodePtySpawnHelperExecutableCached = yield* Effect.cached(
+        ensureNodePtySpawnHelperExecutable().pipe(
+          Effect.provideService(FileSystem.FileSystem, fs),
+          Effect.provideService(Path.Path, path),
+          Effect.orElseSucceed(() => undefined),
+        ),
+      );
 
-    const ensureNodePtySpawnHelperExecutableCached = yield* Effect.cached(
-      ensureNodePtySpawnHelperExecutable().pipe(
-        Effect.provideService(FileSystem.FileSystem, fs),
-        Effect.provideService(Path.Path, path),
-        Effect.orElseSucceed(() => undefined),
-      ),
-    );
+      const loadNodePtyCached = yield* Effect.cached(
+        Effect.tryPromise({
+          try: loadNodePty,
+          catch: (cause) =>
+            new PtySpawnError({
+              adapter: "node-pty",
+              message: "Failed to load node-pty native support.",
+              cause,
+            }),
+        }),
+      );
 
-    return {
-      spawn: Effect.fn(function* (input) {
-        yield* ensureNodePtySpawnHelperExecutableCached;
-        const ptyProcess = nodePty.spawn(input.shell, input.args ?? [], {
-          cwd: input.cwd,
-          cols: input.cols,
-          rows: input.rows,
-          env: input.env,
-          name: globalThis.process.platform === "win32" ? "xterm-color" : "xterm-256color",
-        });
-        return new NodePtyProcess(ptyProcess);
-      }),
-    } satisfies PtyAdapterShape;
-  }),
-);
+      return {
+        spawn: Effect.fn(function* (input) {
+          const nodePty = yield* loadNodePtyCached;
+          yield* ensureNodePtySpawnHelperExecutableCached;
+          const ptyProcess = nodePty.spawn(input.shell, input.args ?? [], {
+            cwd: input.cwd,
+            cols: input.cols,
+            rows: input.rows,
+            env: input.env,
+            name: globalThis.process.platform === "win32" ? "xterm-color" : "xterm-256color",
+          });
+          return new NodePtyProcess(ptyProcess);
+        }),
+      } satisfies PtyAdapterShape;
+    }),
+  );
+}
+
+export const NodePtyAdapterLive = makeNodePtyAdapterLive();

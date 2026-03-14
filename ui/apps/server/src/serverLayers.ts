@@ -104,7 +104,20 @@ export function makeTerminalPtyAdapterLayer(
       try: loadNodePtyAdapter,
       catch: (cause) => cause,
     }).pipe(
-      Effect.map((module) => module.NodePtyAdapterLive),
+      Effect.map((module) =>
+        module.NodePtyAdapterLive.pipe(
+          Layer.catch((cause) => {
+            if (!isRecoverableNodePtyLoadError(cause)) {
+              return Layer.unwrap(Effect.die(cause));
+            }
+
+            const detail = collectErrorMessages(cause)[0] ?? "node-pty failed to load.";
+            return makeUnavailablePtyAdapterLive(
+              `Terminal PTY support is unavailable in this runtime because node-pty failed to load. ${detail}`,
+            );
+          }),
+        ),
+      ),
       Effect.catch((cause) => {
         if (!isRecoverableNodePtyLoadError(cause)) {
           return Effect.die(cause);
