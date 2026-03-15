@@ -3,7 +3,7 @@
 ## implemented behavior
 - Finalized the Telegram session-sync and bridge-lock fixes on `dev` for promotion through the repository release flow.
 - Revalidated the targeted server and web coverage for the current working tree before release promotion.
-- Chose the release alignment strategy that treats the current `main` release line as the source of truth for `test`, so the nightly automation produces the next `alpha.1` prerelease instead of continuing the stale `0.0.4-alpha.*` line.
+- Chose the release alignment strategy that treats the current `main` release line as the source of truth for `test`, so the nightly automation produces the next `alpha.1` prerelease instead of continuing the stale legacy prerelease line.
 
 ## tests added or updated
 - Re-ran `bun run test src/optidevTelegramBridge.test.ts src/optidevRoute.test.ts src/optidevStartup.test.ts src/optidevLifecycle.test.ts` in `ui/apps/server`.
