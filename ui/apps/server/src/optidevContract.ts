@@ -197,6 +197,7 @@ export interface OptiDevActionPayload {
   botToken?: string;
   chatId?: string;
   threadId?: string;
+  threadTitle?: string;
 }
 
 export interface OptiDevActionResponse {
