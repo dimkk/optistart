@@ -14,3 +14,4 @@
 
 ## open loops or known limits
 - GitHub release verification still depends on the new `test` and `main` workflow runs completing successfully after the promotion pushes.
+- Stable/nightly workflow concurrency is now hardened separately so a newer branch push cancels an older in-flight release run instead of letting overlapping runs compete for the same branch lifecycle.
