@@ -25,4 +25,4 @@
 ## approvals / notes
 - User explicitly asked to bump and publish through `test` and `main`.
 - Live `dev` runtime on `8886` must not be stopped or restarted during this release cycle.
-- Release interpretation for the requested `..1` bump: align `test` with the current `main` release line before publishing so the nightly workflow produces the next `alpha.1` tag instead of incrementing the stale `0.0.4-alpha.*` line.
+- Release interpretation for the requested `..1` bump: align `test` with the current `main` release line before publishing so the nightly workflow produces the next `alpha.1` tag instead of incrementing the stale legacy prerelease line.
