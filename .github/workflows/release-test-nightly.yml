@@ -11,7 +11,7 @@ permissions:
 
 concurrency:
   group: release-test-nightly
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   prepare:
