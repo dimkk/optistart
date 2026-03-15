@@ -427,6 +427,36 @@ describe("optidevRoute", () => {
     });
   });
 
+  it("records the currently selected UI thread for Telegram auto-targeting", async () => {
+    const { uiRoot } = createMockRepoRoot();
+    const homeDir = makeTempDir("optidev-native-home-");
+
+    await withRouteServer({ cwd: uiRoot, homeDir }, async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/api/optidev/active-thread`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          threadId: "thread-alpha",
+          threadTitle: "Alpha session",
+        }),
+      });
+      const body = (await response.json()) as { ok: boolean; lines: string[] };
+
+      expect(response.status).toBe(200);
+      expect(body.ok).toBe(true);
+      expect(body.lines).toEqual(["Active thread recorded: thread-alpha."]);
+      expect(
+        JSON.parse(fs.readFileSync(path.join(homeDir, "active_session.json"), "utf8")) as {
+          active_thread_id?: string;
+          active_thread_title?: string;
+        },
+      ).toMatchObject({
+        active_thread_id: "thread-alpha",
+        active_thread_title: "Alpha session",
+      });
+    });
+  });
+
   it("serves manifest, memory graph, and plugin inventory through native endpoints", async () => {
     const { repoRoot, uiRoot } = createMockRepoRoot();
     const homeDir = makeTempDir("optidev-native-home-");

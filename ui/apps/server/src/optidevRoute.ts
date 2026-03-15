@@ -7,6 +7,7 @@ import {
   type OptiDevRouteContext,
   resolveOptiDevProjectRoot,
 } from "./optidevContract";
+import { recordOptiDevActiveThreadSelection } from "./optidevActiveSession";
 import {
   buildNativeState,
   nativeLogsAction,
@@ -515,6 +516,38 @@ export async function tryHandleOptiDevRequest(
       json(res, 200, { ok: true, lines: ["Telegram settings saved."], data: { ...data, bridge } });
     } catch (error) {
       json(res, 400, toErrorResponse(error, "Failed to save Telegram config."));
+    }
+    return true;
+  }
+
+  if (url.pathname === "/api/optidev/active-thread") {
+    if (method !== "POST" && method !== "PUT") {
+      json(res, 405, { ok: false, lines: ["Method not allowed."] });
+      return true;
+    }
+
+    let payload: OptiDevActionPayload = {};
+    if (reqBody.trim().length > 0) {
+      try {
+        payload = JSON.parse(reqBody) as OptiDevActionPayload;
+      } catch {
+        json(res, 400, { ok: false, lines: ["Invalid JSON body."] });
+        return true;
+      }
+    }
+
+    const threadId = payload.threadId?.trim() ? payload.threadId.trim() : null;
+    try {
+      await recordOptiDevActiveThreadSelection(context, {
+        threadId,
+        threadTitle: payload.threadTitle?.trim() ? payload.threadTitle.trim() : null,
+      });
+      json(res, 200, {
+        ok: true,
+        lines: [threadId ? `Active thread recorded: ${threadId}.` : "Active thread cleared."],
+      });
+    } catch (error) {
+      json(res, 400, toErrorResponse(error, "Failed to record active thread."));
     }
     return true;
   }

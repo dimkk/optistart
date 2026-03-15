@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import type { OptiDevActionResponse, OptiDevRouteContext } from "./optidevContract";
+import { writeOptiDevWorkspaceSession } from "./optidevActiveSession";
 import { discoverProjectsNative, resolveHomeDir } from "./optidevNative";
 import { recordNativeWorkspaceStopped } from "./optidevPlugins";
 
@@ -179,16 +180,13 @@ export async function nativeStopAction(
     path.join(resolveHomeDir(context), "sessions", active.project, "session.json"),
     stopped,
   );
-  await writeJson(
-    path.join(resolveHomeDir(context), "active_session.json"),
-    {
-      project: stopped.project,
-      status: stopped.status,
-      mux_backend: stopped.mux_backend,
-      mux_session_name: stopped.mux_session_name,
-      updated_at: stoppedAt,
-    },
-  );
+  await writeOptiDevWorkspaceSession(context, {
+    project: stopped.project,
+    status: stopped.status,
+    mux_backend: stopped.mux_backend,
+    mux_session_name: stopped.mux_session_name,
+    updated_at: stoppedAt,
+  });
   await markProjectSessionStopped(context, active.project, stoppedAt);
   return { ok: true, lines: [`Stopped session '${active.mux_session_name}'.`] };
 }

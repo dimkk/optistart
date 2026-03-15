@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 
 import type { OptiDevActionResponse, OptiDevRouteContext } from "./optidevContract";
+import { writeOptiDevWorkspaceSession } from "./optidevActiveSession";
 import {
   type ProjectConfig,
   type WorkspaceManifest,
@@ -588,13 +589,6 @@ async function currentHomeSession(homeDir: string, projectName: string): Promise
 
 async function writeSessionState(homeDir: string, state: SessionState): Promise<void> {
   await writeJson(path.join(homeDir, "sessions", state.project, "session.json"), state);
-  await writeJson(path.join(homeDir, "active_session.json"), {
-    project: state.project,
-    status: state.status,
-    mux_backend: state.mux_backend,
-    mux_session_name: state.mux_session_name,
-    updated_at: new Date().toISOString(),
-  });
 }
 
 async function writeProjectSession(projectDir: string, manifest: WorkspaceManifest, state: SessionState, runnerName: string, mode: string): Promise<void> {
@@ -695,6 +689,13 @@ async function startResolvedProject(
   await saveRunnerBootstrap(homeDir, projectName, projectDir, runnerName, now);
   await writeJson(path.join(sessionDir, "agents.json"), activeAgents);
   await writeSessionState(homeDir, state);
+  await writeOptiDevWorkspaceSession(context, {
+    project: state.project,
+    status: state.status,
+    mux_backend: state.mux_backend,
+    mux_session_name: state.mux_session_name,
+    updated_at: new Date().toISOString(),
+  });
   await writeProjectSession(projectDir, manifest, state, runnerName, runtimeMode);
   await recordNativeWorkspaceStarted(context, { project: projectName, status: state.status });
 

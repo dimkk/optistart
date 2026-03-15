@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 
 import {
   CommandId,
@@ -12,6 +13,7 @@ import {
 } from "@t3tools/contracts";
 
 import type { OptiDevRouteContext } from "./optidevContract";
+import { readOptiDevActiveSession } from "./optidevActiveSession";
 
 interface TelegramConfig {
   enabled: boolean;
@@ -22,14 +24,20 @@ interface TelegramConfig {
   target_updated_at: string | null;
 }
 
-interface ActiveSessionState {
-  project?: unknown;
-  status?: unknown;
-}
-
 interface TelegramBridgePersistedState {
   lastUpdateId: number;
   updatedAt: string;
+  availability: "unknown" | "available" | "unavailable";
+  resolvedThreadId: string | null;
+  resolvedThreadTitle: string | null;
+  unavailableReplySent: boolean;
+}
+
+interface TelegramBridgeLockState {
+  pid: number;
+  ownerId: string;
+  updatedAt: string;
+  hostname: string;
 }
 
 interface TelegramUpdateMessage {
@@ -56,6 +64,10 @@ export interface OptiDevTelegramBridgeRuntimeDeps {
   readonly pollIntervalMs?: number;
   readonly requestTimeoutMs?: number;
   readonly logger?: (message: string, details?: Record<string, unknown>) => void;
+  readonly currentPid?: number;
+  readonly lockOwnerId?: string;
+  readonly lockStaleMs?: number;
+  readonly isProcessAlive?: (pid: number) => boolean;
 }
 
 export interface OptiDevTelegramBridgeRuntimeHandle {
@@ -67,6 +79,7 @@ export interface OptiDevTelegramBridgeRuntimeHandle {
 const DEFAULT_POLL_INTERVAL_MS = 2_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 15_000;
 const DEFAULT_TELEGRAM_BASE_URL = "https://api.telegram.org";
+const DEFAULT_LOCK_STALE_MS = 15_000;
 
 let activeRuntime: OptiDevTelegramBridgeRuntimeHandle | null = null;
 
@@ -86,8 +99,8 @@ function telegramBridgeStatePath(context: OptiDevRouteContext): string {
   return path.join(pluginsDir(context), "telegram-bridge-state.json");
 }
 
-function activeSessionPath(context: OptiDevRouteContext): string {
-  return path.join(resolveHomeDir(context), "active_session.json");
+function telegramBridgeLockPath(context: OptiDevRouteContext): string {
+  return path.join(pluginsDir(context), "telegram-bridge-lock.json");
 }
 
 async function fileExists(filePath: string): Promise<boolean> {
@@ -106,6 +119,131 @@ async function readJson<T>(filePath: string): Promise<T> {
 async function writeJson(filePath: string, payload: unknown): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, JSON.stringify(payload, null, 2), "utf8");
+}
+
+function defaultIsProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
+async function readBridgeLock(
+  context: OptiDevRouteContext,
+): Promise<TelegramBridgeLockState | null> {
+  const filePath = telegramBridgeLockPath(context);
+  if (!(await fileExists(filePath))) {
+    return null;
+  }
+  try {
+    const data = await readJson<Record<string, unknown>>(filePath);
+    return typeof data.pid === "number" &&
+      Number.isFinite(data.pid) &&
+      typeof data.ownerId === "string" &&
+      typeof data.updatedAt === "string" &&
+      typeof data.hostname === "string"
+      ? {
+          pid: data.pid,
+          ownerId: data.ownerId,
+          updatedAt: data.updatedAt,
+          hostname: data.hostname,
+        }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+async function writeBridgeLock(
+  context: OptiDevRouteContext,
+  state: TelegramBridgeLockState,
+): Promise<void> {
+  await writeJson(telegramBridgeLockPath(context), state);
+}
+
+export async function tryAcquireOptiDevTelegramBridgeLock(input: {
+  readonly context: OptiDevRouteContext;
+  readonly pid: number;
+  readonly ownerId: string;
+  readonly now: string;
+  readonly staleAfterMs?: number;
+  readonly isProcessAlive?: (pid: number) => boolean;
+}): Promise<{
+  acquired: boolean;
+  ownerPid: number | null;
+  ownerId: string | null;
+  stale: boolean;
+}> {
+  const current = await readBridgeLock(input.context);
+  const staleAfterMs = input.staleAfterMs ?? DEFAULT_LOCK_STALE_MS;
+  const isProcessAlive = input.isProcessAlive ?? defaultIsProcessAlive;
+  if (
+    current &&
+    current.pid === input.pid &&
+    current.ownerId === input.ownerId
+  ) {
+    await writeBridgeLock(input.context, {
+      pid: input.pid,
+      ownerId: input.ownerId,
+      updatedAt: input.now,
+      hostname: os.hostname(),
+    });
+    return {
+      acquired: true,
+      ownerPid: input.pid,
+      ownerId: input.ownerId,
+      stale: false,
+    };
+  }
+
+  const currentUpdatedAt = current ? Date.parse(current.updatedAt) : Number.NaN;
+  const nextUpdatedAt = Date.parse(input.now);
+  const staleByTime =
+    current &&
+    Number.isFinite(currentUpdatedAt) &&
+    Number.isFinite(nextUpdatedAt) &&
+    nextUpdatedAt - currentUpdatedAt > staleAfterMs;
+  const staleByProcess = current ? !isProcessAlive(current.pid) : false;
+  const stale = Boolean(staleByTime || staleByProcess);
+
+  if (!current || stale) {
+    await writeBridgeLock(input.context, {
+      pid: input.pid,
+      ownerId: input.ownerId,
+      updatedAt: input.now,
+      hostname: os.hostname(),
+    });
+    return {
+      acquired: true,
+      ownerPid: input.pid,
+      ownerId: input.ownerId,
+      stale,
+    };
+  }
+
+  return {
+    acquired: false,
+    ownerPid: current.pid,
+    ownerId: current.ownerId,
+    stale: false,
+  };
+}
+
+export async function releaseOptiDevTelegramBridgeLock(input: {
+  readonly context: OptiDevRouteContext;
+  readonly pid: number;
+  readonly ownerId: string;
+}): Promise<void> {
+  const current = await readBridgeLock(input.context);
+  if (!current) {
+    return;
+  }
+  if (current.pid !== input.pid || current.ownerId !== input.ownerId) {
+    return;
+  }
+  await fs.rm(telegramBridgeLockPath(input.context), { force: true });
 }
 
 async function readTelegramConfig(context: OptiDevRouteContext): Promise<TelegramConfig> {
@@ -147,7 +285,14 @@ async function readPersistedState(
 ): Promise<TelegramBridgePersistedState> {
   const filePath = telegramBridgeStatePath(context);
   if (!(await fileExists(filePath))) {
-    return { lastUpdateId: 0, updatedAt: "" };
+    return {
+      lastUpdateId: 0,
+      updatedAt: "",
+      availability: "unknown",
+      resolvedThreadId: null,
+      resolvedThreadTitle: null,
+      unavailableReplySent: false,
+    };
   }
   try {
     const data = await readJson<Record<string, unknown>>(filePath);
@@ -157,9 +302,25 @@ async function readPersistedState(
           ? data.lastUpdateId
           : 0,
       updatedAt: typeof data.updatedAt === "string" ? data.updatedAt : "",
+      availability:
+        data.availability === "available" || data.availability === "unavailable"
+          ? data.availability
+          : "unknown",
+      resolvedThreadId:
+        typeof data.resolvedThreadId === "string" ? data.resolvedThreadId : null,
+      resolvedThreadTitle:
+        typeof data.resolvedThreadTitle === "string" ? data.resolvedThreadTitle : null,
+      unavailableReplySent: Boolean(data.unavailableReplySent),
     };
   } catch {
-    return { lastUpdateId: 0, updatedAt: "" };
+    return {
+      lastUpdateId: 0,
+      updatedAt: "",
+      availability: "unknown",
+      resolvedThreadId: null,
+      resolvedThreadTitle: null,
+      unavailableReplySent: false,
+    };
   }
 }
 
@@ -173,19 +334,17 @@ async function writePersistedState(
 async function readActiveSession(context: OptiDevRouteContext): Promise<{
   project: string;
   status: string;
+  activeThreadId: string | null;
 } | null> {
-  const filePath = activeSessionPath(context);
-  if (!(await fileExists(filePath))) {
+  const data = await readOptiDevActiveSession(context);
+  if (!data?.project || !data.status) {
     return null;
   }
-  try {
-    const data = await readJson<ActiveSessionState>(filePath);
-    return typeof data.project === "string" && typeof data.status === "string"
-      ? { project: data.project, status: data.status }
-      : null;
-  } catch {
-    return null;
-  }
+  return {
+    project: data.project,
+    status: data.status,
+    activeThreadId: data.active_thread_id,
+  };
 }
 
 function isThreadSessionActive(status: string | null | undefined): boolean {
@@ -222,6 +381,13 @@ export async function resolveTelegramTargetThread(input: {
   if (input.preferredThreadId) {
     const preferred = threads.find((thread) => thread.id === input.preferredThreadId) ?? null;
     return preferred;
+  }
+
+  if (active?.activeThreadId) {
+    const selected = threads.find((thread) => thread.id === active.activeThreadId) ?? null;
+    if (selected) {
+      return selected;
+    }
   }
 
   if (active?.status === "running" || active?.status === "restored") {
@@ -396,15 +562,25 @@ export function startOptiDevTelegramBridgeRuntime(
   const pollIntervalMs = deps.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   const requestTimeoutMs = deps.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
   const log = deps.logger ?? (() => {});
+  const currentPid = deps.currentPid ?? process.pid;
+  const lockOwnerId = deps.lockOwnerId ?? `${currentPid}:${randomUUID()}`;
+  const lockStaleMs = deps.lockStaleMs ?? DEFAULT_LOCK_STALE_MS;
+  const isProcessAlive = deps.isProcessAlive ?? defaultIsProcessAlive;
   const telegramOriginMessageIds = new Set<string>();
+  const outboundRelayMessageIds = new Set<string>();
 
   let stopped = false;
   let running = false;
+  let ownsBridgeLock = false;
   let reloadRequested = true;
   let activeConfigKey = "";
   let persistedState: TelegramBridgePersistedState = {
     lastUpdateId: 0,
     updatedAt: "",
+    availability: "unknown",
+    resolvedThreadId: null,
+    resolvedThreadTitle: null,
+    unavailableReplySent: false,
   };
 
   const emitStatus = async (message: string): Promise<void> => {
@@ -442,6 +618,36 @@ export function startOptiDevTelegramBridgeRuntime(
     return config;
   };
 
+  const ensureBridgeLock = async (): Promise<boolean> => {
+    const result = await tryAcquireOptiDevTelegramBridgeLock({
+      context,
+      pid: currentPid,
+      ownerId: lockOwnerId,
+      now: now(),
+      staleAfterMs: lockStaleMs,
+      isProcessAlive,
+    });
+    if (!result.acquired) {
+      if (ownsBridgeLock) {
+        log("telegram.bridge.lock.lost", {
+          ownerPid: result.ownerPid,
+          ownerId: result.ownerId,
+        });
+      }
+      ownsBridgeLock = false;
+      return false;
+    }
+    if (!ownsBridgeLock) {
+      log("telegram.bridge.lock.acquired", {
+        pid: currentPid,
+        ownerId: lockOwnerId,
+        staleRecovered: result.stale,
+      });
+    }
+    ownsBridgeLock = true;
+    return true;
+  };
+
   const buildStatusMessage = async (): Promise<string> => {
     const snapshot = await deps.getSnapshot();
     const config = await readTelegramConfig(context);
@@ -460,8 +666,78 @@ export function startOptiDevTelegramBridgeRuntime(
     if (updateId <= persistedState.lastUpdateId) {
       return;
     }
-    persistedState = { lastUpdateId: updateId, updatedAt: now() };
+    persistedState = {
+      ...persistedState,
+      lastUpdateId: updateId,
+      updatedAt: now(),
+    };
     await writePersistedState(context, persistedState);
+  };
+
+  const rememberOutboundRelay = (messageId: string): boolean => {
+    if (outboundRelayMessageIds.has(messageId)) {
+      return false;
+    }
+    outboundRelayMessageIds.add(messageId);
+    if (outboundRelayMessageIds.size > 2048) {
+      const first = outboundRelayMessageIds.values().next().value;
+      if (typeof first === "string") {
+        outboundRelayMessageIds.delete(first);
+      }
+    }
+    return true;
+  };
+
+  const updateResolvedTargetState = async (thread: OrchestrationThread | null): Promise<void> => {
+    const previousAvailability = persistedState.availability;
+    const previousThreadId = persistedState.resolvedThreadId;
+    let notice: string | null = null;
+
+    if (previousAvailability !== "unknown") {
+      if (!thread && previousAvailability === "available" && previousThreadId) {
+        notice =
+          `Telegram bridge lost its active t3 session target. Previous guid: ${previousThreadId}. ` +
+          "Waiting for a new active thread.";
+      } else if (
+        thread &&
+        previousAvailability === "available" &&
+        previousThreadId &&
+        previousThreadId !== thread.id
+      ) {
+        notice =
+          `Telegram bridge session switched. Previous guid: ${previousThreadId}. ` +
+          `Current guid: ${thread.id}.`;
+      } else if (thread && previousAvailability === "unavailable") {
+        notice = `Telegram bridge reattached. Current guid: ${thread.id}.`;
+      }
+    }
+
+    persistedState = {
+      ...persistedState,
+      availability: thread ? "available" : "unavailable",
+      resolvedThreadId: thread?.id ?? null,
+      resolvedThreadTitle: thread?.title ?? null,
+      unavailableReplySent: thread ? false : persistedState.unavailableReplySent,
+    };
+    await writePersistedState(context, persistedState);
+
+    if (notice) {
+      await emitStatus(notice);
+    }
+  };
+
+  const resolveCurrentTarget = async (
+    config: TelegramConfig,
+    snapshot?: OrchestrationReadModel,
+  ): Promise<OrchestrationThread | null> => {
+    const effectiveSnapshot = snapshot ?? (await deps.getSnapshot());
+    const thread = await resolveTelegramTargetThread({
+      context,
+      snapshot: effectiveSnapshot,
+      preferredThreadId: config.target_thread_id,
+    });
+    await updateResolvedTargetState(thread);
+    return thread;
   };
 
   const handleIncomingText = async (
@@ -476,21 +752,24 @@ export function startOptiDevTelegramBridgeRuntime(
     if (stopped) {
       return;
     }
-    const thread = await resolveTelegramTargetThread({
-      context,
-      snapshot,
-      preferredThreadId: config.target_thread_id,
-    });
+    const thread = await resolveCurrentTarget(config, snapshot);
     const updateId = telegramUpdateId(update);
     if (!thread) {
-      await sendTelegramMessage({
-        fetchImpl,
-        telegramBaseUrl,
-        token: config.token,
-        chatId: config.chat_id!,
-        text: "No active t3 thread is available yet.",
-        requestTimeoutMs,
-      });
+      if (!persistedState.unavailableReplySent) {
+        await sendTelegramMessage({
+          fetchImpl,
+          telegramBaseUrl,
+          token: config.token,
+          chatId: config.chat_id!,
+          text: "No active t3 thread is available yet.",
+          requestTimeoutMs,
+        });
+        persistedState = {
+          ...persistedState,
+          unavailableReplySent: true,
+        };
+        await writePersistedState(context, persistedState);
+      }
       return;
     }
     if (updateId === null) {
@@ -529,8 +808,15 @@ export function startOptiDevTelegramBridgeRuntime(
     }
     running = true;
     try {
+      if (!(await ensureBridgeLock())) {
+        return;
+      }
       const config = await resolveCurrentConfig();
       if (stopped || !config) {
+        return;
+      }
+      await resolveCurrentTarget(config);
+      if (stopped) {
         return;
       }
 
@@ -604,7 +890,7 @@ export function startOptiDevTelegramBridgeRuntime(
   };
 
   const handleDomainEvent = (event: OrchestrationEvent) => {
-    if (stopped || event.type !== "thread.message-sent") {
+    if (stopped || !ownsBridgeLock || event.type !== "thread.message-sent") {
       return;
     }
 
@@ -617,16 +903,15 @@ export function startOptiDevTelegramBridgeRuntime(
       if (stopped) {
         return;
       }
-      const targetThread = await resolveTelegramTargetThread({
-        context,
-        snapshot,
-        preferredThreadId: config.target_thread_id,
-      });
+      const targetThread = await resolveCurrentTarget(config, snapshot);
       if (!targetThread || targetThread.id !== event.payload.threadId) {
         return;
       }
       const text = sanitizeTelegramText(event.payload.text);
       if (!text) {
+        return;
+      }
+      if (!rememberOutboundRelay(event.payload.messageId)) {
         return;
       }
       if (event.payload.role === "user") {
@@ -688,6 +973,11 @@ export function startOptiDevTelegramBridgeRuntime(
       }
       stopped = true;
       clearInterval(interval);
+      void releaseOptiDevTelegramBridgeLock({
+        context,
+        pid: currentPid,
+        ownerId: lockOwnerId,
+      });
       if (activeRuntime === handle) {
         activeRuntime = null;
       }

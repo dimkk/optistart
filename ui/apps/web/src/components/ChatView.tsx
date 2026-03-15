@@ -51,6 +51,7 @@ import { gitBranchesQueryOptions, gitCreateWorktreeMutationOptions } from "~/lib
 import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
 import { serverConfigQueryOptions, serverQueryKeys } from "~/lib/serverReactQuery";
 import { debugOptiDev } from "~/optidevDebug";
+import { syncActiveOptiDevThread } from "~/optidevActiveThread";
 import {
   fetchTelegramConfig,
   runTelegramBridgeAction,
@@ -828,6 +829,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
     composerDraft.interactionMode ?? activeThread?.interactionMode ?? DEFAULT_INTERACTION_MODE;
   const isServerThread = serverThread !== undefined;
   const isLocalDraftThread = !isServerThread && localDraftThread !== undefined;
+  const activeThreadId = activeThread?.id ?? null;
 
   useEffect(() => {
     debugOptiDev("chat.view.thread", {
@@ -852,12 +854,26 @@ export default function ChatView({ threadId }: ChatViewProps) {
       });
     }
   }, [activeThread, isLocalDraftThread, isServerThread, threadId]);
+
+  useEffect(() => {
+    if (!isServerThread || !activeThreadId) {
+      return;
+    }
+    void syncActiveOptiDevThread({
+      threadId: activeThreadId,
+      threadTitle: activeThread?.title ?? null,
+    }).catch((error) => {
+      debugOptiDev("chat.view.active-thread.sync-failed", {
+        threadId: activeThreadId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  }, [activeThread?.title, activeThreadId, isServerThread]);
   const diffSearch = useMemo(
     () => parseDiffRouteSearch(rawSearch as Record<string, unknown>),
     [rawSearch],
   );
   const diffOpen = diffSearch.diff === "1";
-  const activeThreadId = activeThread?.id ?? null;
   const activeLatestTurn = activeThread?.latestTurn ?? null;
   const latestTurnSettled = isLatestTurnSettled(activeLatestTurn, activeThread?.session ?? null);
   const activeProject = projects.find((p) => p.id === activeThread?.projectId);

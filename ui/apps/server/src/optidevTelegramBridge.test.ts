@@ -13,8 +13,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { OptiDevRouteContext } from "./optidevContract";
 import {
+  releaseOptiDevTelegramBridgeLock,
   resolveTelegramTargetThread,
   startOptiDevTelegramBridgeRuntime,
+  tryAcquireOptiDevTelegramBridgeLock,
 } from "./optidevTelegramBridge";
 
 const tempDirs: string[] = [];
@@ -34,6 +36,7 @@ function seedTelegramConfig(homeDir: string, config?: Partial<{
   token: string;
   chat_id: number | null;
   updated_at: string;
+  target_thread_id: string | null;
 }>): void {
   fs.mkdirSync(path.join(homeDir, "plugins"), { recursive: true });
   fs.writeFileSync(
@@ -44,6 +47,7 @@ function seedTelegramConfig(homeDir: string, config?: Partial<{
         token: "123456:ABCDEF",
         chat_id: 42,
         updated_at: "2026-03-13T00:00:00.000Z",
+        target_thread_id: null,
         ...config,
       },
       null,
@@ -69,10 +73,23 @@ function seedTelegramState(homeDir: string, lastUpdateId: number): void {
   );
 }
 
-function seedActiveSession(homeDir: string, project: string, status = "running"): void {
+function seedActiveSession(
+  homeDir: string,
+  project: string,
+  status = "running",
+  activeThreadId?: string | null,
+): void {
   fs.writeFileSync(
     path.join(homeDir, "active_session.json"),
-    JSON.stringify({ project, status }, null, 2),
+    JSON.stringify(
+      {
+        project,
+        status,
+        active_thread_id: activeThreadId ?? null,
+      },
+      null,
+      2,
+    ),
     "utf8",
   );
 }
@@ -203,6 +220,19 @@ describe("optidevTelegramBridge", () => {
     });
 
     expect(thread).toBeNull();
+  });
+
+  it("prefers the currently selected UI thread over the freshest active fallback", async () => {
+    const homeDir = makeTempDir("optidev-telegram-home-");
+    const context = makeContext(homeDir, "/repo/demo");
+    seedActiveSession(homeDir, "demo", "running", "thread-alpha");
+
+    const thread = await resolveTelegramTargetThread({
+      context,
+      snapshot: makeSnapshot(),
+    });
+
+    expect(thread?.id).toBe("thread-alpha");
   });
 
   it("bridges inbound telegram text into thread.turn.start and sends assistant replies back", async () => {
@@ -783,5 +813,329 @@ describe("optidevTelegramBridge", () => {
       staleRuntime.stop();
       freshRuntime.stop();
     }
+  });
+
+  it("emits a Telegram notice when the resolved target guid switches", async () => {
+    const homeDir = makeTempDir("optidev-telegram-home-");
+    const context = makeContext(homeDir, "/repo/demo");
+    seedActiveSession(homeDir, "demo", "running", "thread-alpha");
+    seedTelegramConfig(homeDir);
+    seedTelegramState(homeDir, 100);
+
+    const sentMessages: string[] = [];
+
+    const fetchImpl: typeof fetch = vi.fn(async (input, init) => {
+      const url = String(input);
+      const method = url.split("/").at(-1);
+      const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+      if (method === "getUpdates") {
+        return new Response(JSON.stringify({ ok: true, result: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (method === "sendMessage") {
+        sentMessages.push(String(body.text ?? ""));
+        return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ ok: false, description: "unknown method" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    const runtime = startOptiDevTelegramBridgeRuntime({
+      context,
+      getSnapshot: async () => makeSnapshot(),
+      dispatchCommand: async () => undefined,
+      fetchImpl,
+      pollIntervalMs: 10,
+    });
+
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      seedActiveSession(homeDir, "demo", "running", "thread-beta");
+
+      await vi.waitFor(() => {
+        expect(
+          sentMessages.some((message) =>
+            message.includes("Telegram bridge session switched. Previous guid: thread-alpha. Current guid: thread-beta."),
+          ),
+        ).toBe(true);
+      });
+    } finally {
+      runtime.stop();
+    }
+  });
+
+  it("sends the unavailable-thread reply only once until a target is available again", async () => {
+    const homeDir = makeTempDir("optidev-telegram-home-");
+    const context = makeContext(homeDir, "/repo/demo");
+    seedActiveSession(homeDir, "demo");
+    seedTelegramConfig(homeDir, { target_thread_id: "thread-missing" });
+    seedTelegramState(homeDir, 100);
+
+    const sentMessages: string[] = [];
+    let getUpdatesCalls = 0;
+
+    const fetchImpl: typeof fetch = vi.fn(async (input, init) => {
+      const url = String(input);
+      const method = url.split("/").at(-1);
+      const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+      if (method === "getUpdates") {
+        getUpdatesCalls += 1;
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            result:
+              getUpdatesCalls === 1
+                ? [
+                    {
+                      update_id: 101,
+                      message: {
+                        message_id: 1,
+                        text: "first",
+                        chat: { id: 42 },
+                      },
+                    },
+                    {
+                      update_id: 102,
+                      message: {
+                        message_id: 2,
+                        text: "second",
+                        chat: { id: 42 },
+                      },
+                    },
+                  ]
+                : [],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (method === "sendMessage") {
+        sentMessages.push(String(body.text ?? ""));
+        return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ ok: false, description: "unknown method" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    const runtime = startOptiDevTelegramBridgeRuntime({
+      context,
+      getSnapshot: async () => makeSnapshot(),
+      dispatchCommand: async () => undefined,
+      fetchImpl,
+      pollIntervalMs: 10,
+    });
+
+    try {
+      await vi.waitFor(() => {
+        expect(sentMessages.filter((message) => message === "No active t3 thread is available yet.")).toHaveLength(1);
+      });
+    } finally {
+      runtime.stop();
+    }
+  });
+
+  it("dedupes repeated outbound assistant relays by message id", async () => {
+    const homeDir = makeTempDir("optidev-telegram-home-");
+    const context = makeContext(homeDir, "/repo/demo");
+    seedActiveSession(homeDir, "demo");
+    seedTelegramConfig(homeDir);
+    seedTelegramState(homeDir, 100);
+
+    const sentMessages: string[] = [];
+
+    const fetchImpl: typeof fetch = vi.fn(async (input, init) => {
+      const url = String(input);
+      const method = url.split("/").at(-1);
+      const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+      if (method === "getUpdates") {
+        return new Response(JSON.stringify({ ok: true, result: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (method === "sendMessage") {
+        sentMessages.push(String(body.text ?? ""));
+        return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ ok: false, description: "unknown method" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    const runtime = startOptiDevTelegramBridgeRuntime({
+      context,
+      getSnapshot: async () => makeSnapshot(),
+      dispatchCommand: async () => undefined,
+      fetchImpl,
+      pollIntervalMs: 10,
+    });
+
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 30));
+
+      const assistantEvent = {
+        sequence: 2,
+        eventId: "event-assistant-1",
+        aggregateKind: "thread",
+        aggregateId: "thread-beta",
+        occurredAt: "2026-03-13T00:00:04.000Z",
+        commandId: null,
+        causationEventId: null,
+        correlationId: null,
+        metadata: {},
+        type: "thread.message-sent",
+        payload: {
+          threadId: ThreadId.makeUnsafe("thread-beta"),
+          messageId: MessageId.makeUnsafe("assistant-1"),
+          role: "assistant",
+          text: "reply from assistant",
+          attachments: [],
+          turnId: null,
+          streaming: false,
+          createdAt: "2026-03-13T00:00:04.000Z",
+          updatedAt: "2026-03-13T00:00:04.000Z",
+        },
+      } satisfies OrchestrationEvent;
+
+      runtime.handleDomainEvent(assistantEvent);
+      runtime.handleDomainEvent(assistantEvent);
+
+      await vi.waitFor(() => {
+        expect(sentMessages.filter((message) => message === "reply from assistant")).toHaveLength(1);
+      });
+    } finally {
+      runtime.stop();
+    }
+  });
+
+  it("does not process Telegram traffic when another live process owns the bridge lock", async () => {
+    const homeDir = makeTempDir("optidev-telegram-home-");
+    const context = makeContext(homeDir, "/repo/demo");
+    seedActiveSession(homeDir, "demo");
+    seedTelegramConfig(homeDir);
+    seedTelegramState(homeDir, 100);
+
+    await tryAcquireOptiDevTelegramBridgeLock({
+      context,
+      pid: 11111,
+      ownerId: "owner-a",
+      now: "2026-03-15T08:00:00.000Z",
+      isProcessAlive: () => true,
+    });
+
+    const dispatched: string[] = [];
+    const sentMessages: string[] = [];
+    let getUpdatesCalls = 0;
+
+    const fetchImpl: typeof fetch = vi.fn(async (input, init) => {
+      const url = String(input);
+      const method = url.split("/").at(-1);
+      const body = init?.body ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {};
+      if (method === "getUpdates") {
+        getUpdatesCalls += 1;
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            result: [
+              {
+                update_id: 101,
+                message: {
+                  message_id: 1,
+                  text: "should not dispatch",
+                  chat: { id: 42 },
+                },
+              },
+            ],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (method === "sendMessage") {
+        sentMessages.push(String(body.text ?? ""));
+        return new Response(JSON.stringify({ ok: true, result: { message_id: 1 } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return new Response(JSON.stringify({ ok: false, description: "unknown method" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" },
+      });
+    }) as typeof fetch;
+
+    const runtime = startOptiDevTelegramBridgeRuntime({
+      context,
+      getSnapshot: async () => makeSnapshot(),
+      dispatchCommand: async (command) => {
+        if (command.type === "thread.turn.start") {
+          dispatched.push(command.message.text);
+        }
+      },
+      fetchImpl,
+      pollIntervalMs: 10,
+      currentPid: 22222,
+      lockOwnerId: "owner-b",
+      now: () => "2026-03-15T08:00:01.000Z",
+      lockStaleMs: 60_000,
+      isProcessAlive: (pid) => pid === 11111,
+    });
+
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      expect(dispatched).toEqual([]);
+      expect(sentMessages).toEqual([]);
+      expect(getUpdatesCalls).toBe(0);
+    } finally {
+      runtime.stop();
+      await releaseOptiDevTelegramBridgeLock({
+        context,
+        pid: 11111,
+        ownerId: "owner-a",
+      });
+    }
+  });
+
+  it("takes over a stale Telegram bridge lock from a dead process", async () => {
+    const homeDir = makeTempDir("optidev-telegram-home-");
+    const context = makeContext(homeDir, "/repo/demo");
+
+    await tryAcquireOptiDevTelegramBridgeLock({
+      context,
+      pid: 11111,
+      ownerId: "owner-a",
+      now: "2026-03-15T08:00:00.000Z",
+      isProcessAlive: () => false,
+    });
+
+    const takeover = await tryAcquireOptiDevTelegramBridgeLock({
+      context,
+      pid: 22222,
+      ownerId: "owner-b",
+      now: "2026-03-15T08:00:20.000Z",
+      staleAfterMs: 5_000,
+      isProcessAlive: () => false,
+    });
+
+    expect(takeover).toEqual({
+      acquired: true,
+      ownerPid: 22222,
+      ownerId: "owner-b",
+      stale: true,
+    });
   });
 });
